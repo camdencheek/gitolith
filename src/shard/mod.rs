@@ -1,6 +1,6 @@
 use memmap::{Mmap, MmapMut};
 use std::fs::File;
-use std::io::{Error, Seek, SeekFrom, Write};
+use std::io::{self, Error, Read, Seek, SeekFrom, Write};
 use std::iter::Iterator;
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
@@ -15,7 +15,7 @@ pub struct Shard {
 }
 
 impl Shard {
-    pub fn new<'a, T: Iterator<Item = &'a Vec<u8>>>(
+    pub fn new<'a, T: Iterator<Item = U>, U: Read>(
         id: ShardID,
         path: &Path,
         docs: T,
@@ -39,25 +39,25 @@ impl Shard {
         // Content starts immediately after the header
         header.content_ptr = ShardHeader::HEADER_SIZE as u64;
 
-        // Create a peekable iterator so we can check whether the next
-        // value would push us over the 4GB limit.
-        let mut docs = docs.peekable();
-
         let mut current_doc_start: u32 = 0;
         let mut doc_starts: Vec<u32> = Vec::with_capacity(docs.size_hint().0);
 
         let zero_byte: [u8; 1] = [0; 1];
-        while let Some(doc) =
-            docs.next_if(|peeked| header.content_len + peeked.len() as u64 + 1 <= u32::MAX.into())
-        {
-            doc_starts.push(current_doc_start);
+        for mut doc in docs {
+            let doc_len = io::copy(&mut doc, &mut f)?;
+            if header.content_len + doc_len + 1 >= u32::MAX.into() {
+                // truncate file back to the length before hitting the limit
+                f.set_len(header.content_ptr + current_doc_start as u64);
+                break;
+            }
 
-            f.write_all(&doc)?;
-            header.content_len += doc.len() as u64;
+            doc_starts.push(current_doc_start);
+            header.content_len += doc_len;
 
             f.write_all(&zero_byte)?; // zero byte at end of each document
             header.content_len += zero_byte.len() as u64;
 
+            // set current_doc_start for the next doc
             current_doc_start = header.content_len as u32;
         }
 
@@ -146,6 +146,10 @@ impl Shard {
         }
     }
 
+    pub fn suffix(&self, idx: u32) -> &[u8] {
+        &self.content()[idx as usize..]
+    }
+
     pub fn doc_content_range(&self, id: u32) -> Range<usize> {
         self.doc_start(id) as usize..self.doc_end(id) as usize
     }
@@ -184,36 +188,22 @@ impl Shard {
     }
 
     pub fn sa_slice(&self, r: Range<&[u8]>) -> &[u32] {
-        &self.sa()[self.sa_find_min(r.start) as usize..self.sa_find_max(r.end) as usize]
+        assert!(r.start < r.end);
+        &self.sa()[self.sa_find(r.start) as usize..self.sa_find(r.end) as usize]
     }
 
     // finds the index of the first suffix that is greater than or equal to needle
-    pub fn sa_find_min(&self, needle: &[u8]) -> u32 {
+    pub fn sa_find(&self, needle: &[u8]) -> u32 {
         let sa = self.sa();
         let content = self.content();
         let (mut low, mut high) = (0usize, sa.len() - 1);
-        while low != high {
+        while low < high {
             let mid = (low + high) / 2;
-            if &content[sa[mid] as usize..] >= needle {
+            let suffix = &content[sa[mid] as usize..];
+            if needle <= suffix {
                 high = mid
             } else {
-                low = mid
-            }
-        }
-        low as u32
-    }
-
-    // finds the index of the first suffix that is greater than needle
-    pub fn sa_find_max(&self, needle: &[u8]) -> u32 {
-        let sa = self.sa();
-        let content = self.content();
-        let (mut low, mut high) = (0usize, sa.len() - 1);
-        while low != high {
-            let mid = (low + high) / 2;
-            if &content[sa[mid] as usize..] > needle {
-                high = mid
-            } else {
-                low = mid
+                low = mid + 1
             }
         }
         low as u32

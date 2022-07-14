@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 memmap = "0.7.0"
 suffix = { path = "../suffix" }
+walkdir = "2.3.2"
