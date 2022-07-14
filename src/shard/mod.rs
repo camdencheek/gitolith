@@ -187,20 +187,42 @@ impl Shard {
         low as u32
     }
 
-    pub fn sa_slice(&self, r: Range<&[u8]>) -> &[u32] {
-        assert!(r.start < r.end);
-        &self.sa()[self.sa_find(r.start) as usize..self.sa_find(r.end) as usize]
+    // returns a slice of all prefixes that start with the literal needle
+    pub fn sa_prefixes(&self, needle: &[u8]) -> &[u32] {
+        &self.sa()[self.sa_find_start(needle) as usize..self.sa_find_end(needle) as usize]
     }
 
-    // finds the index of the first suffix that is greater than or equal to needle
-    pub fn sa_find(&self, needle: &[u8]) -> u32 {
+    pub fn sa_range(&self, r: Range<&[u8]>) -> &[u32] {
+        assert!(r.start < r.end);
+        &self.sa()[self.sa_find_start(r.start) as usize..self.sa_find_start(r.end) as usize]
+    }
+
+    // finds the index of the first suffix whose prefix is needle
+    pub fn sa_find_start(&self, needle: &[u8]) -> u32 {
         let sa = self.sa();
         let content = self.content();
         let (mut low, mut high) = (0usize, sa.len() - 1);
         while low < high {
             let mid = (low + high) / 2;
             let suffix = &content[sa[mid] as usize..];
-            if needle <= suffix {
+            if suffix >= needle {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        low as u32
+    }
+
+    // finds the index of the first suffix whose prefix is greater than needle
+    pub fn sa_find_end(&self, needle: &[u8]) -> u32 {
+        let sa = self.sa();
+        let content = self.content();
+        let (mut low, mut high) = (0usize, sa.len() - 1);
+        while low < high {
+            let mid = (low + high) / 2;
+            let suffix = &content[sa[mid] as usize..sa[mid] as usize + needle.len()];
+            if suffix > needle {
                 high = mid
             } else {
                 low = mid + 1

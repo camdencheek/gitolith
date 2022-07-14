@@ -1,5 +1,6 @@
 #![allow(unused)]
 pub mod shard;
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use shard::Shard;
 use std::env;
 use std::error::Error;
@@ -8,41 +9,60 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = env::args();
-    args.next(); // skip first
-    let shard_path = args.next().expect("need shard path");
+#[derive(Parser, Debug)]
+pub struct Cli {
+    #[clap(subcommand)]
+    pub cmd: Command,
+}
 
-    let s = Shard::open(0, &Path::new(&shard_path))?;
-    dbg!(s.header.content_ptr);
-    dbg!(s.header.content_len);
-    println!("{}", s.doc_content_range(0).end);
-    println!("{}", s.doc_from_suffix(0));
-    println!("{}", s.doc_from_suffix(3300));
-    println!("{}", s.doc_from_suffix(3457));
-    println!("{}", s.doc_from_suffix(3458));
-    let camdens = s.sa_slice(b"camden"..b"camdeo");
-    for camden in camdens {
-        println!("{}", String::from_utf8(s.suffix(*camden)[..100].to_vec())?);
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    Index(IndexArgs),
+    Search(SearchArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct IndexArgs {
+    pub output_shard: PathBuf,
+    pub repo: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct SearchArgs {
+    pub shard: PathBuf,
+    pub query: String,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Cli::parse();
+    match args.cmd {
+        Command::Index(a) => build_index(a)?,
+        Command::Search(a) => search(a)?,
     }
     Ok(())
+}
 
-    // let mut args = env::args();
-    // args.next(); // skip first
-    // let shard_path = args.next().expect("need shard path");
-    // let repo_path = args.next().expect("need repo path");
+fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
+    let s = Shard::open(0, &args.shard)?;
+    let camdens = s.sa_prefixes(args.query.as_bytes());
+    for camden in camdens {
+        println!("{}", String::from_utf8(s.suffix(*camden)[..12].to_vec())?);
+    }
+    Ok(())
+}
 
-    // let documents = WalkDir::new(repo_path)
-    //     .into_iter()
-    //     .filter_map(|e| e.ok())
-    //     .filter(|e| e.file_type().is_file())
-    //     .map(|e| LazyFileReader {
-    //         path: e.into_path(),
-    //         f: None,
-    //     });
+fn build_index(args: IndexArgs) -> Result<(), Box<dyn Error>> {
+    let documents = WalkDir::new(args.repo)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| LazyFileReader {
+            path: e.into_path(),
+            f: None,
+        });
 
-    // let s = Shard::new(0, &Path::new(&shard_path), documents)?;
-    // Ok(())
+    let s = Shard::new(0, &Path::new(&args.output_shard), documents)?;
+    Ok(())
 }
 
 struct LazyFileReader {
