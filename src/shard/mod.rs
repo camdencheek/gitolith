@@ -1,20 +1,25 @@
-use memmap::MmapMut;
+use memmap::{Mmap, MmapMut};
 use std::fs::File;
 use std::io::{Error, Seek, SeekFrom, Write};
 use std::iter::Iterator;
+use std::ops::Range;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use suffix;
 
 pub type ShardID = u32;
 
-pub struct Shard {}
+pub struct Shard {
+    pub header: ShardHeader,
+    raw: Mmap,
+}
 
 impl Shard {
     pub fn new<'a, T: Iterator<Item = &'a Vec<u8>>>(
         id: ShardID,
         path: &Path,
         docs: T,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut f = File::options()
             .read(true)
             .write(true)
@@ -38,35 +43,43 @@ impl Shard {
         // value would push us over the 4GB limit.
         let mut docs = docs.peekable();
 
-        let mut current_doc_start: u64 = 0;
-        let mut doc_starts: Vec<u64> = Vec::with_capacity(docs.size_hint().0);
+        let mut current_doc_start: u32 = 0;
+        let mut doc_starts: Vec<u32> = Vec::with_capacity(docs.size_hint().0);
 
         let zero_byte: [u8; 1] = [0; 1];
         while let Some(doc) =
             docs.next_if(|peeked| header.content_len + peeked.len() as u64 + 1 <= u32::MAX.into())
         {
             doc_starts.push(current_doc_start);
-            current_doc_start += doc.len() as u64;
 
             f.write_all(&doc)?;
-            f.write_all(&zero_byte)?; // zero byte at end of each document
+            header.content_len += doc.len() as u64;
 
-            header.content_len += doc.len() as u64 + 1;
+            f.write_all(&zero_byte)?; // zero byte at end of each document
+            header.content_len += zero_byte.len() as u64;
+
+            current_doc_start = header.content_len as u32;
         }
 
+        header.doc_starts_ptr =
+            header.content_ptr + header.content_len * std::mem::size_of::<u8>() as u64;
         let mut buf: Vec<u8> = Vec::with_capacity(doc_starts.len() * 8);
-        for doc_start in doc_starts {
+        for doc_start in &doc_starts {
             buf.extend_from_slice(&doc_start.to_le_bytes());
         }
         f.write_all(&buf)?;
-        header.doc_starts_ptr = header.content_ptr + header.content_len;
-        header.doc_starts_len = buf.len() as u64;
+        header.doc_starts_len = doc_starts.len() as u64;
 
-        header.sa_ptr = header.doc_starts_ptr + header.doc_starts_len;
-        header.sa_len = header.content_len * std::mem::size_of::<u32>() as u64;
+        header.sa_ptr = header.doc_starts_ptr + buf.len() as u64;
+        header.sa_len = header.content_len;
 
-        println!("setting length to {}", header.sa_ptr + header.sa_len);
-        f.set_len(header.sa_ptr + header.sa_len);
+        let file_size = header.sa_ptr + header.sa_len * std::mem::size_of::<u32>() as u64;
+        dbg!(file_size);
+        f.set_len(file_size);
+
+        dbg!(&header);
+        f.write_at(&header.to_bytes(), 0)?;
+        f.seek(SeekFrom::Start(0))?;
 
         println!("initialized shard");
 
@@ -80,18 +93,135 @@ impl Shard {
             )
         };
 
+        println!("opened mmap");
+
         let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
         let mut bins = suffix::Bins::new();
         suffix::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content));
-        Ok(Shard {})
+
+        println!("built suffix array");
+        header.flags = 0; // unset incomplete flag
+        f.write_at(&header.to_bytes(), 0)?;
+
+        Self::from_mmap(mmap.make_read_only()?)
+    }
+
+    pub fn open(id: ShardID, path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut f = File::open(path)?;
+        let mmap = unsafe { Mmap::map(&f)? };
+        Self::from_mmap(mmap)
+    }
+
+    fn from_mmap(mmap: Mmap) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            header: ShardHeader::from_bytes(&mmap)?,
+            raw: mmap,
+        })
+    }
+
+    fn content(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.raw[self.header.content_ptr as usize..].as_ptr(),
+                self.header.content_len as usize,
+            )
+        }
+    }
+
+    pub fn doc_starts(&self) -> &[u32] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.raw[self.header.doc_starts_ptr as usize..].as_ptr() as *const u32,
+                self.header.doc_starts_len as usize,
+            )
+        }
+    }
+
+    pub fn sa(&self) -> &[u32] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.raw[self.header.sa_ptr as usize..].as_ptr() as *const u32,
+                self.header.sa_len as usize,
+            )
+        }
+    }
+
+    pub fn doc_content_range(&self, id: u32) -> Range<usize> {
+        self.doc_start(id) as usize..self.doc_end(id) as usize
+    }
+
+    pub fn doc_start(&self, id: u32) -> u32 {
+        let starts = self.doc_starts();
+        starts[id as usize]
+    }
+
+    pub fn doc_end(&self, id: u32) -> u32 {
+        match self.doc_starts().get(id as usize + 1) {
+            // We subtract one to remove the trailing zero byte
+            Some(&next_start) => next_start - 1,
+            None => self.header.content_len as u32 - 1,
+        }
+    }
+
+    pub fn doc_content(&self, id: u32) -> &[u8] {
+        &self.content()[self.doc_content_range(id)]
+    }
+
+    pub fn doc_from_suffix(&self, suffix: u32) -> u32 {
+        let starts = self.doc_starts();
+        let (mut low, mut high) = (0usize, starts.len());
+        while low != high {
+            let mid = (low + high) / 2;
+            if self.doc_start(mid as u32) > suffix {
+                high = mid - 1
+            } else if self.doc_end(mid as u32) < suffix {
+                low = mid + 1
+            } else {
+                return mid as u32;
+            }
+        }
+        low as u32
+    }
+
+    pub fn sa_slice(&self, r: Range<&[u8]>) -> &[u32] {
+        &self.sa()[self.sa_find_min(r.start) as usize..self.sa_find_max(r.end) as usize]
+    }
+
+    // finds the index of the first suffix that is greater than or equal to needle
+    pub fn sa_find_min(&self, needle: &[u8]) -> u32 {
+        let sa = self.sa();
+        let content = self.content();
+        let (mut low, mut high) = (0usize, sa.len() - 1);
+        while low != high {
+            let mid = (low + high) / 2;
+            if &content[sa[mid] as usize..] >= needle {
+                high = mid
+            } else {
+                low = mid
+            }
+        }
+        low as u32
+    }
+
+    // finds the index of the first suffix that is greater than needle
+    pub fn sa_find_max(&self, needle: &[u8]) -> u32 {
+        let sa = self.sa();
+        let content = self.content();
+        let (mut low, mut high) = (0usize, sa.len() - 1);
+        while low != high {
+            let mid = (low + high) / 2;
+            if &content[sa[mid] as usize..] > needle {
+                high = mid
+            } else {
+                low = mid
+            }
+        }
+        low as u32
     }
 }
 
-pub struct Document<'a> {
-    content: &'a [u8],
-}
-
 #[repr(C)]
+#[derive(Debug)]
 pub struct ShardHeader {
     pub version: u16,
     pub flags: u16,
@@ -109,12 +239,33 @@ impl ShardHeader {
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_INCOMPLETE: u16 = 1 << 0;
 
-    pub fn to_bytes(&self) -> &[u8; Self::HEADER_SIZE] {
-        todo!();
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
+        buf.write(&self.version.to_le_bytes());
+        buf.write(&self.flags.to_le_bytes());
+        buf.write(&self.id.to_le_bytes());
+        buf.write(&self.content_ptr.to_le_bytes());
+        dbg!(&self.content_ptr);
+        buf.write(&self.content_len.to_le_bytes());
+        buf.write(&self.doc_starts_ptr.to_le_bytes());
+        buf.write(&self.doc_starts_len.to_le_bytes());
+        buf.write(&self.sa_ptr.to_le_bytes());
+        buf.write(&self.sa_len.to_le_bytes());
+        buf
     }
 
-    pub fn from_bytes() -> Result<Self, ()> {
-        todo!();
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut s = Self::default();
+        s.version = u16::from_le_bytes(buf[0..2].try_into()?);
+        s.flags = u16::from_le_bytes(buf[2..4].try_into()?);
+        s.id = u32::from_le_bytes(buf[4..8].try_into()?);
+        s.content_ptr = u64::from_le_bytes(buf[8..16].try_into()?);
+        s.content_len = u64::from_le_bytes(buf[16..24].try_into()?);
+        s.doc_starts_ptr = u64::from_le_bytes(buf[24..32].try_into()?);
+        s.doc_starts_len = u64::from_le_bytes(buf[32..40].try_into()?);
+        s.sa_ptr = u64::from_le_bytes(buf[40..48].try_into()?);
+        s.sa_len = u64::from_le_bytes(buf[48..56].try_into()?);
+        Ok(s)
     }
 }
 
