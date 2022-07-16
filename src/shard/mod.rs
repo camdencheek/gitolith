@@ -1,6 +1,10 @@
-use memmap::{Mmap, MmapMut};
 mod regex;
+mod suffix;
+
+use self::suffix::SuffixIdx;
+use ::suffix as suf;
 use itertools::{Itertools, Product};
+use memmap::{Mmap, MmapMut};
 use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
@@ -8,7 +12,6 @@ use std::iter::Iterator;
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use suffix;
 
 pub type ShardID = u32;
 pub type DocID = u32;
@@ -100,9 +103,9 @@ impl Shard {
 
         println!("opened mmap");
 
-        let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
-        let mut bins = suffix::Bins::new();
-        suffix::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content));
+        let mut stypes = suf::SuffixTypes::new(sa.len() as u32);
+        let mut bins = suf::Bins::new();
+        suf::sais(sa, &mut stypes, &mut bins, &suf::Utf8(content));
 
         println!("built suffix array");
         header.flags = 0; // unset incomplete flag
@@ -198,50 +201,32 @@ impl Shard {
     }
 
     pub fn sa_range(&self, r: Range<&[u8]>) -> &[u32] {
-        assert!(r.start < r.end);
+        debug_assert!(r.start < r.end);
         &self.sa()[self.sa_find_start(r.start) as usize..self.sa_find_start(r.end) as usize]
     }
 
-    // finds the index of the first suffix whose prefix is needle
-    pub fn sa_find_start(&self, needle: &[u8]) -> u32 {
+    // finds the index of the first suffix whose prefix is greater than or equal to needle
+    pub fn sa_find_start(&self, needle: &[u8]) -> SuffixIdx {
         let sa = self.sa();
         let content = self.content();
-        let (mut low, mut high) = (0usize, sa.len() - 1);
-        while low < high {
-            let mid = (low + high) / 2;
-            let suffix = &content[sa[mid] as usize..];
-            if suffix >= needle {
-                high = mid
-            } else {
-                low = mid + 1
-            }
-        }
-        low as u32
+        sa.partition_point(|idx| {
+            let suf_start = *idx as usize;
+            let suf_end = usize::min(suf_start + needle.len(), content.len());
+            let suf = &content[suf_start..suf_end];
+            suf < needle
+        }) as SuffixIdx
     }
 
     // finds the index of the first suffix whose prefix is greater than needle
-    pub fn sa_find_end(&self, needle: &[u8]) -> u32 {
+    pub fn sa_find_end(&self, needle: &[u8]) -> SuffixIdx {
         let sa = self.sa();
         let content = self.content();
-        let (mut low, mut high) = (0usize, sa.len() - 1);
-        while low < high {
-            let mid = (low + high) / 2;
-            let suffix = &content[sa[mid] as usize..sa[mid] as usize + needle.len()];
-            if suffix > needle {
-                high = mid
-            } else {
-                low = mid + 1
-            }
-        }
-        low as u32
-    }
-}
-
-struct RegexMatchIterator {}
-
-impl RegexMatchIterator {
-    fn new(ir: hir::Hir) -> Self {
-        match ir.kind() {}
+        sa.partition_point(|&idx| {
+            let suf_start = idx as usize;
+            let suf_end = usize::min(suf_start + needle.len(), content.len());
+            let suf = &content[suf_start..suf_end];
+            suf <= needle
+        }) as SuffixIdx
     }
 }
 

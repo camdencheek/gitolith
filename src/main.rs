@@ -23,8 +23,12 @@ pub enum Command {
 
 #[derive(Parser, Debug)]
 pub struct IndexArgs {
+    #[clap(short = 'o')]
     pub output_shard: PathBuf,
-    pub repo: PathBuf,
+    #[clap(long = "dir")]
+    pub dir: Option<PathBuf>,
+    #[clap(long = "str")]
+    pub string: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -44,15 +48,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
     let s = Shard::open(0, &args.shard)?;
-    let camdens = s.sa_prefixes(args.query.as_bytes());
-    for camden in camdens {
-        println!("{}", String::from_utf8(s.suffix(*camden)[..12].to_vec())?);
+    let matches = s.sa_prefixes(args.query.as_bytes());
+    for m in matches {
+        let mut suffix = s.suffix(*m);
+        suffix = &suffix[..usize::min(suffix.len(), 100)];
+
+        println!("{}", String::from_utf8(suffix.to_vec())?);
     }
     Ok(())
 }
 
 fn build_index(args: IndexArgs) -> Result<(), Box<dyn Error>> {
-    let documents = WalkDir::new(args.repo)
+    if let Some(dir) = args.dir {
+        return build_directory_index(args.output_shard, dir);
+    } else if let Some(s) = args.string {
+        return build_string_index(args.output_shard, s);
+    } else {
+        panic!("must specify a directory or a string to index")
+    }
+}
+
+fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Box<dyn Error>> {
+    let documents = WalkDir::new(dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -61,7 +78,13 @@ fn build_index(args: IndexArgs) -> Result<(), Box<dyn Error>> {
             f: None,
         });
 
-    let s = Shard::new(0, &Path::new(&args.output_shard), documents)?;
+    let s = Shard::new(0, &Path::new(&output_shard), documents)?;
+    Ok(())
+}
+
+fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Box<dyn Error>> {
+    let documents = std::iter::once(s.as_bytes());
+    let s = Shard::new(0, &Path::new(&output_shard), documents)?;
     Ok(())
 }
 
