@@ -255,13 +255,44 @@ trait SuffixRangeIterator: Iterator<Item = LitRange> {
     fn depth_hint(&self) -> (usize, Option<usize>);
 }
 
-enum SuffixRangeIter<T: SuffixRangeIterator> {
+#[derive(Clone)]
+enum SuffixRangeIter {
     Empty(EmptyIterator),
-    ByteLiteral(ByteLiteralAppender<T>),
-    UnicodeLiteral(UnicodeLiteralAppender<T>),
-    ByteClass(ByteClassAppender<T>),
-    UnicodeClass(UnicodeClassAppender<T>),
-    Alternation(AlternationIterator<T>),
+    ByteLiteral(ByteLiteralAppender),
+    UnicodeLiteral(UnicodeLiteralAppender),
+    ByteClass(ByteClassAppender),
+    UnicodeClass(UnicodeClassAppender),
+    Alternation(AlternationAppender),
+}
+
+impl Iterator for SuffixRangeIter {
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use SuffixRangeIter::*;
+        match self {
+            Empty(v) => v.next(),
+            ByteLiteral(v) => v.next(),
+            UnicodeLiteral(v) => v.next(),
+            ByteClass(v) => v.next(),
+            UnicodeClass(v) => v.next(),
+            Alternation(v) => v.next(),
+        }
+    }
+}
+
+impl SuffixRangeIterator for SuffixRangeIter {
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        use SuffixRangeIter::*;
+        match self {
+            Empty(v) => v.depth_hint(),
+            ByteLiteral(v) => v.depth_hint(),
+            UnicodeLiteral(v) => v.depth_hint(),
+            ByteClass(v) => v.depth_hint(),
+            UnicodeClass(v) => v.depth_hint(),
+            Alternation(v) => v.depth_hint(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -292,18 +323,12 @@ impl SuffixRangeIterator for EmptyIterator {
 }
 
 #[derive(Clone)]
-struct ByteLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    predecessor: T,
+struct ByteLiteralAppender {
+    predecessor: Box<SuffixRangeIter>,
     byte: u8,
 }
 
-impl<T> Iterator for ByteLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl Iterator for ByteLiteralAppender {
     type Item = LitRange;
 
     fn next(&mut self) -> Option<LitRange> {
@@ -323,10 +348,7 @@ where
     }
 }
 
-impl<T> SuffixRangeIterator for ByteLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl SuffixRangeIterator for ByteLiteralAppender {
     fn depth_hint(&self) -> (usize, Option<usize>) {
         let (low, high) = self.predecessor.depth_hint();
         (low + 1, high.map(|i| i + 1))
@@ -334,18 +356,12 @@ where
 }
 
 #[derive(Clone)]
-struct UnicodeLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    predecessor: T,
+struct UnicodeLiteralAppender {
+    predecessor: Box<SuffixRangeIter>,
     char: char,
 }
 
-impl<T> Iterator for UnicodeLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl Iterator for UnicodeLiteralAppender {
     type Item = LitRange;
 
     fn next(&mut self) -> Option<LitRange> {
@@ -363,10 +379,7 @@ where
     }
 }
 
-impl<T> SuffixRangeIterator for UnicodeLiteralAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl SuffixRangeIterator for UnicodeLiteralAppender {
     fn depth_hint(&self) -> (usize, Option<usize>) {
         let char_size = self.char.len_utf8();
         let (low, high) = self.predecessor.depth_hint();
@@ -375,31 +388,22 @@ where
 }
 
 #[derive(Clone)]
-struct ByteClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    product: Product<T, std::vec::IntoIter<hir::ClassBytesRange>>,
+struct ByteClassAppender {
+    product: Box<Product<SuffixRangeIter, std::vec::IntoIter<hir::ClassBytesRange>>>,
     depth_hint: (usize, Option<usize>),
 }
 
-impl<T> ByteClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    pub fn new(predecessor: T, class: hir::ClassBytes) -> Self {
+impl ByteClassAppender {
+    pub fn new(predecessor: SuffixRangeIter, class: hir::ClassBytes) -> Self {
         let (depth_low, depth_high) = predecessor.depth_hint();
         Self {
-            product: predecessor.cartesian_product(class.ranges().to_vec()),
+            product: Box::new(predecessor.cartesian_product(class.ranges().to_vec())),
             depth_hint: (depth_low + 1, depth_high.map(|i| i + 1)),
         }
     }
 }
 
-impl<T> Iterator for ByteClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl Iterator for ByteClassAppender {
     type Item = LitRange;
 
     fn next(&mut self) -> Option<LitRange> {
@@ -415,29 +419,20 @@ where
     }
 }
 
-impl<T> SuffixRangeIterator for ByteClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
+impl SuffixRangeIterator for ByteClassAppender {
     fn depth_hint(&self) -> (usize, Option<usize>) {
         self.depth_hint
     }
 }
 
 #[derive(Clone)]
-struct UnicodeClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    product: Product<T, UnicodeRangeSplitIterator>,
+struct UnicodeClassAppender {
+    product: Box<Product<SuffixRangeIter, UnicodeRangeSplitIterator>>,
     depth_hint: (usize, Option<usize>),
 }
 
-impl<T> UnicodeClassAppender<T>
-where
-    T: SuffixRangeIterator,
-{
-    pub fn new(predecessor: T, class: hir::ClassUnicode) -> Self {
+impl UnicodeClassAppender {
+    pub fn new(predecessor: SuffixRangeIter, class: hir::ClassUnicode) -> Self {
         let (depth_low, depth_high) = predecessor.depth_hint();
         let min_char_len = class
             .ranges()
@@ -452,7 +447,7 @@ where
             .end()
             .len_utf8();
         Self {
-            product: predecessor.cartesian_product(UnicodeRangeSplitIterator::new(class)),
+            product: Box::new(predecessor.cartesian_product(UnicodeRangeSplitIterator::new(class))),
             depth_hint: (
                 depth_low + min_char_len,
                 depth_high.map(|i| i + max_char_len),
@@ -485,24 +480,51 @@ impl SuffixRangeIterator for UnicodeClassAppender {
 }
 
 #[derive(Clone)]
-struct AlternationIterator<T>
-where
-    T: SuffixRangeIterator,
-{
-    predecessor: T,
-    alternatives: U,
+struct AlternationAppender {
+    product: Box<
+        itertools::Product<
+            SuffixRangeIter,
+            std::iter::Flatten<std::vec::IntoIter<SuffixRangeIter>>,
+        >,
+    >,
+    depth_hint: (usize, Option<usize>),
 }
 
-impl<T, U> AlternationIterator<T, U>
-where
-    T: SuffixRangeIterator,
-    U: Iterator<Item = Box<dyn SuffixRangeIterator>> + Clone,
-{
-    fn new(predecessor: T, alternatives: U) -> Self {
+impl AlternationAppender {
+    fn new(predecessor: SuffixRangeIter, alternatives: Vec<SuffixRangeIter>) -> Self {
+        assert!(!alternatives.is_empty());
+        let (base_low, base_high) = predecessor.depth_hint();
+        let depth_hint = alternatives.iter().fold((usize::MAX, Some(0)), |acc, it| {
+            let (l, h) = it.depth_hint();
+            let new_min = usize::min(acc.0, l);
+            let new_max = match (acc.1, h) {
+                (Some(i), Some(j)) => Some(usize::max(i, j)),
+                _ => None,
+            };
+            (new_min, new_max)
+        });
         Self {
-            predecessor,
-            alternatives,
+            product: Box::new(predecessor.cartesian_product(alternatives.into_iter().flatten())),
+            depth_hint,
         }
+    }
+}
+
+impl Iterator for AlternationAppender {
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (base, addition) = self.product.next()?;
+        let (mut start, mut end) = base.into_inner();
+        start.extend_from_slice(addition.start());
+        end.extend_from_slice(addition.end());
+        Some(start..=end)
+    }
+}
+
+impl SuffixRangeIterator for AlternationAppender {
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        self.depth_hint
     }
 }
 
