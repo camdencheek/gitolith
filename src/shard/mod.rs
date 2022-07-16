@@ -1,13 +1,18 @@
 use memmap::{Mmap, MmapMut};
+mod regex;
+use itertools::{Itertools, Product};
+use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
 use std::iter::Iterator;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use suffix;
 
 pub type ShardID = u32;
+pub type DocID = u32;
+pub type SuffixID = u32;
 
 pub struct Shard {
     pub header: ShardHeader,
@@ -229,6 +234,350 @@ impl Shard {
             }
         }
         low as u32
+    }
+}
+
+struct RegexMatchIterator {}
+
+impl RegexMatchIterator {
+    fn new(ir: hir::Hir) -> Self {
+        match ir.kind() {}
+    }
+}
+
+// A range of byte string literals.
+// Invariant: start <= end.
+type LitRange = RangeInclusive<Vec<u8>>;
+
+trait SuffixRangeIterator: Iterator<Item = LitRange> {
+    // A lower and optional upper bound on the length of the byte vec bounds
+    // on the yielded LitRange.
+    fn depth_hint(&self) -> (usize, Option<usize>);
+}
+
+enum SuffixRangeIter<T: SuffixRangeIterator> {
+    Empty(EmptyIterator),
+    ByteLiteral(ByteLiteralAppender<T>),
+    UnicodeLiteral(UnicodeLiteralAppender<T>),
+    ByteClass(ByteClassAppender<T>),
+    UnicodeClass(UnicodeClassAppender<T>),
+    Alternation(AlternationIterator<T>),
+}
+
+#[derive(Clone)]
+struct EmptyIterator(std::iter::Once<LitRange>);
+
+impl EmptyIterator {
+    fn new() -> Self {
+        Self(std::iter::once(b"".to_vec()..=b"".to_vec()))
+    }
+}
+
+impl Iterator for EmptyIterator {
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<LitRange> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl SuffixRangeIterator for EmptyIterator {
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(0))
+    }
+}
+
+#[derive(Clone)]
+struct ByteLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    predecessor: T,
+    byte: u8,
+}
+
+impl<T> Iterator for ByteLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<LitRange> {
+        match self.predecessor.next() {
+            Some(r) => {
+                let (mut start, mut end) = r.into_inner();
+                start.push(self.byte);
+                end.push(self.byte);
+                Some(start..=end)
+            }
+            None => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.predecessor.size_hint()
+    }
+}
+
+impl<T> SuffixRangeIterator for ByteLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        let (low, high) = self.predecessor.depth_hint();
+        (low + 1, high.map(|i| i + 1))
+    }
+}
+
+#[derive(Clone)]
+struct UnicodeLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    predecessor: T,
+    char: char,
+}
+
+impl<T> Iterator for UnicodeLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<LitRange> {
+        match self.predecessor.next() {
+            Some(r) => {
+                let mut buf = [0u8; 4];
+                let bytes = self.char.encode_utf8(&mut buf[..]).as_bytes();
+                let (mut start, mut end) = r.into_inner();
+                start.extend_from_slice(bytes);
+                end.extend_from_slice(bytes);
+                Some(start..=end)
+            }
+            None => None,
+        }
+    }
+}
+
+impl<T> SuffixRangeIterator for UnicodeLiteralAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        let char_size = self.char.len_utf8();
+        let (low, high) = self.predecessor.depth_hint();
+        (low + char_size, high.map(|i| i + char_size))
+    }
+}
+
+#[derive(Clone)]
+struct ByteClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    product: Product<T, std::vec::IntoIter<hir::ClassBytesRange>>,
+    depth_hint: (usize, Option<usize>),
+}
+
+impl<T> ByteClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    pub fn new(predecessor: T, class: hir::ClassBytes) -> Self {
+        let (depth_low, depth_high) = predecessor.depth_hint();
+        Self {
+            product: predecessor.cartesian_product(class.ranges().to_vec()),
+            depth_hint: (depth_low + 1, depth_high.map(|i| i + 1)),
+        }
+    }
+}
+
+impl<T> Iterator for ByteClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<LitRange> {
+        let (curr, range) = self.product.next()?;
+        let (mut start, mut end) = curr.into_inner();
+        start.push(range.start());
+        end.push(range.end());
+        Some(start..=end)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.product.size_hint()
+    }
+}
+
+impl<T> SuffixRangeIterator for ByteClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        self.depth_hint
+    }
+}
+
+#[derive(Clone)]
+struct UnicodeClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    product: Product<T, UnicodeRangeSplitIterator>,
+    depth_hint: (usize, Option<usize>),
+}
+
+impl<T> UnicodeClassAppender<T>
+where
+    T: SuffixRangeIterator,
+{
+    pub fn new(predecessor: T, class: hir::ClassUnicode) -> Self {
+        let (depth_low, depth_high) = predecessor.depth_hint();
+        let min_char_len = class
+            .ranges()
+            .first()
+            .expect("rangess should never be empty")
+            .start()
+            .len_utf8();
+        let max_char_len = class
+            .ranges()
+            .last()
+            .expect("ranges should never be empty")
+            .end()
+            .len_utf8();
+        Self {
+            product: predecessor.cartesian_product(UnicodeRangeSplitIterator::new(class)),
+            depth_hint: (
+                depth_low + min_char_len,
+                depth_high.map(|i| i + max_char_len),
+            ),
+        }
+    }
+}
+
+impl Iterator for UnicodeClassAppender {
+    type Item = LitRange;
+
+    fn next(&mut self) -> Option<LitRange> {
+        let (lit_range, unicode_range) = self.product.next()?;
+        let (mut start, mut end) = lit_range.into_inner();
+        let mut buf = [0u8; 4];
+        start.extend_from_slice(unicode_range.start().encode_utf8(&mut buf).as_bytes());
+        end.extend_from_slice(unicode_range.end().encode_utf8(&mut buf).as_bytes());
+        Some(start..=end)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.product.size_hint()
+    }
+}
+
+impl SuffixRangeIterator for UnicodeClassAppender {
+    fn depth_hint(&self) -> (usize, Option<usize>) {
+        self.depth_hint
+    }
+}
+
+#[derive(Clone)]
+struct AlternationIterator<T>
+where
+    T: SuffixRangeIterator,
+{
+    predecessor: T,
+    alternatives: U,
+}
+
+impl<T, U> AlternationIterator<T, U>
+where
+    T: SuffixRangeIterator,
+    U: Iterator<Item = Box<dyn SuffixRangeIterator>> + Clone,
+{
+    fn new(predecessor: T, alternatives: U) -> Self {
+        Self {
+            predecessor,
+            alternatives,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct UnicodeRangeSplitIterator {
+    product: Product<
+        std::vec::IntoIter<hir::ClassUnicodeRange>,
+        std::array::IntoIter<hir::ClassUnicodeRange, 4>,
+    >,
+}
+
+impl UnicodeRangeSplitIterator {
+    fn new(class: hir::ClassUnicode) -> Self {
+        let new_range = |a: u32, b: u32| {
+            hir::ClassUnicodeRange::new(char::from_u32(a).unwrap(), char::from_u32(b).unwrap())
+        };
+        // TODO this could probably be const
+        let sized_ranges = [
+            new_range(0, 0x007F),
+            new_range(0x0080, 0x07FF),
+            new_range(0x0800, 0xFFFF),
+            new_range(0x10000, 0x10FFFF),
+        ];
+        Self {
+            product: class
+                .ranges()
+                .to_vec()
+                .into_iter()
+                .cartesian_product(sized_ranges.into_iter()),
+        }
+    }
+
+    fn intersect(
+        left: hir::ClassUnicodeRange,
+        right: hir::ClassUnicodeRange,
+    ) -> Option<hir::ClassUnicodeRange> {
+        let start = char::max(left.start(), right.start());
+        let end = char::min(left.end(), right.end());
+        if start <= end {
+            Some(hir::ClassUnicodeRange::new(start, end))
+        } else {
+            None
+        }
+    }
+}
+
+impl Iterator for UnicodeRangeSplitIterator {
+    type Item = hir::ClassUnicodeRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (left, right) = self.product.next()?;
+            if let Some(range) = Self::intersect(left, right) {
+                return Some(range);
+            }
+        }
+    }
+}
+
+struct DocumentIterator<'a> {
+    shard: &'a Shard,
+    next_id: DocID,
+}
+
+impl<'a> Iterator for DocumentIterator<'a> {
+    type Item = (DocID, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_id >= self.shard.header.doc_starts_len as u32 {
+            None
+        } else {
+            let res = Some((self.next_id, self.shard.doc_content(self.next_id as u32)));
+            self.next_id += 1;
+            res
+        }
     }
 }
 
