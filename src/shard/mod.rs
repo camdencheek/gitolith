@@ -9,6 +9,7 @@ use crossbeam;
 use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
 use rayon;
+use rayon::prelude::*;
 use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
@@ -247,7 +248,7 @@ impl Shard {
         // TODO would be nice if this returned deterministic results.
         // TODO would be nice if this iterated over results rather than collected them.
         // TODO make this respect a limit.
-        fn search_docs(s: &Shard, re: &Regex, range: Range<u32>) -> Vec<DocMatches> {
+        fn search_docs<'a>(s: &'a Shard, re: &Regex, range: Range<u32>) -> Vec<DocMatches<'a>> {
             if range.end - range.start > 1 {
                 let partition = (range.end + range.start) / 2;
                 let (mut a, mut b) = rayon::join(
@@ -259,13 +260,15 @@ impl Shard {
             }
 
             let doc_id = range.start;
+            let content = s.doc_content(doc_id);
             let matched_ranges = re
-                .find_iter(s.doc_content(doc_id))
+                .find_iter(content)
                 .map(|m| m.start() as u32..m.end() as u32)
                 .collect::<Vec<Range<u32>>>();
             if matched_ranges.len() > 0 {
                 vec![DocMatches {
                     doc: doc_id,
+                    content: content,
                     matched_ranges,
                 }]
             } else {
@@ -275,10 +278,46 @@ impl Shard {
         let num_docs = self.header.doc_starts_len as u32;
         search_docs(self, &re, 0..num_docs)
     }
+
+    pub fn search_skip_index_iter<'a, 'b: 'a>(
+        &'a self,
+        re: &'b Regex,
+    ) -> impl Iterator<Item = DocMatches<'a>> {
+        let num_docs = self.header.doc_starts_len as u32;
+        chunk_doc_range(0..num_docs, 64)
+            .map(|chunk| {
+                chunk
+                    .into_iter()
+                    .collect::<Vec<DocID>>()
+                    .into_par_iter()
+                    .map(|doc_id| DocMatches {
+                        doc: doc_id,
+                        content: self.doc_content(doc_id),
+                        matched_ranges: re
+                            .find_iter(self.doc_content(doc_id))
+                            .map(|range| range.start() as u32..range.end() as u32)
+                            .collect(),
+                    })
+                    .filter(|m| m.matched_ranges.len() > 0)
+                    .collect::<Vec<DocMatches<'a>>>()
+            })
+            .flatten()
+    }
 }
 
-pub struct DocMatches {
+fn chunk_doc_range(range: Range<DocID>, chunk_size: u32) -> impl Iterator<Item = Range<DocID>> {
+    range
+        .clone()
+        .step_by(chunk_size as usize)
+        .map(move |block_start| {
+            let block_end = (block_start + chunk_size).min(range.end);
+            block_start..block_end
+        })
+}
+
+pub struct DocMatches<'a> {
     pub doc: DocID,
+    pub content: &'a [u8],
     pub matched_ranges: Vec<Range<u32>>,
 }
 
