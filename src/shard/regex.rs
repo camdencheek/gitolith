@@ -2,7 +2,7 @@ use itertools::{Itertools, Product};
 use regex_syntax::hir::{self, visit, Hir, HirKind, Visitor};
 use std::ops::{Range, RangeInclusive};
 
-struct RangesBuilder {
+pub struct RangesBuilder {
     open: Option<SuffixRangeIter>,
     closed: Vec<SuffixRangeIter>,
 }
@@ -172,7 +172,7 @@ trait SuffixRangeIterator: Iterator<Item = LitRange> {
 }
 
 #[derive(Clone)]
-enum SuffixRangeIter {
+pub enum SuffixRangeIter {
     Empty(EmptyIterator),
     ByteLiteral(ByteLiteralAppender),
     UnicodeLiteral(UnicodeLiteralAppender),
@@ -212,7 +212,7 @@ impl SuffixRangeIterator for SuffixRangeIter {
 }
 
 #[derive(Clone)]
-struct EmptyIterator(std::iter::Once<LitRange>);
+pub struct EmptyIterator(std::iter::Once<LitRange>);
 
 impl EmptyIterator {
     fn new() -> Self {
@@ -239,7 +239,7 @@ impl SuffixRangeIterator for EmptyIterator {
 }
 
 #[derive(Clone)]
-struct ByteLiteralAppender {
+pub struct ByteLiteralAppender {
     predecessor: Box<SuffixRangeIter>,
     byte: u8,
 }
@@ -281,7 +281,7 @@ impl SuffixRangeIterator for ByteLiteralAppender {
 }
 
 #[derive(Clone)]
-struct UnicodeLiteralAppender {
+pub struct UnicodeLiteralAppender {
     predecessor: Box<SuffixRangeIter>,
     char: char,
 }
@@ -322,7 +322,7 @@ impl SuffixRangeIterator for UnicodeLiteralAppender {
 }
 
 #[derive(Clone)]
-struct ByteClassAppender {
+pub struct ByteClassAppender {
     product: Box<Product<SuffixRangeIter, std::vec::IntoIter<hir::ClassBytesRange>>>,
     depth_hint: (usize, Option<usize>),
 }
@@ -360,7 +360,7 @@ impl SuffixRangeIterator for ByteClassAppender {
 }
 
 #[derive(Clone)]
-struct UnicodeClassAppender {
+pub struct UnicodeClassAppender {
     product: Box<Product<SuffixRangeIter, UnicodeRangeSplitIterator>>,
     depth_hint: (usize, Option<usize>),
 }
@@ -414,7 +414,7 @@ impl SuffixRangeIterator for UnicodeClassAppender {
 }
 
 #[derive(Clone)]
-struct AlternationAppender {
+pub struct AlternationAppender {
     product: Box<
         itertools::Product<
             SuffixRangeIter,

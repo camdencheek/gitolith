@@ -1,10 +1,14 @@
 mod regex;
 mod suffix;
 
+pub use self::regex::*;
 use self::suffix::SuffixIdx;
+use ::regex::bytes::Regex;
 use ::suffix as suf;
+use crossbeam;
 use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
+use rayon;
 use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
@@ -12,6 +16,7 @@ use std::iter::Iterator;
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::thread;
 
 pub type ShardID = u32;
 pub type DocID = u32;
@@ -127,7 +132,7 @@ impl Shard {
         })
     }
 
-    fn content(&self) -> &[u8] {
+    pub fn content(&self) -> &[u8] {
         unsafe {
             std::slice::from_raw_parts(
                 self.raw[self.header.content_ptr as usize..].as_ptr(),
@@ -200,9 +205,13 @@ impl Shard {
         &self.sa()[self.sa_find_start(needle) as usize..self.sa_find_end(needle) as usize]
     }
 
-    pub fn sa_range(&self, r: Range<&[u8]>) -> &[u32] {
-        debug_assert!(r.start < r.end);
-        &self.sa()[self.sa_find_start(r.start) as usize..self.sa_find_start(r.end) as usize]
+    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> &[u32]
+    where
+        T: AsRef<[u8]> + Ord,
+    {
+        debug_assert!(r.start() <= r.end());
+        &self.sa()[self.sa_find_start(r.start().as_ref()) as usize
+            ..self.sa_find_end(r.end().as_ref()) as usize]
     }
 
     // finds the index of the first suffix whose prefix is greater than or equal to needle
@@ -228,11 +237,60 @@ impl Shard {
             suf <= needle
         }) as SuffixIdx
     }
+
+    pub fn docs(&self) -> DocumentIterator<'_> {
+        DocumentIterator::new(self)
+    }
+
+    pub fn search_skip_index(&self, re: Regex) -> Vec<DocMatches> {
+        // Quick and dirty work-stealing with rayon.
+        // TODO would be nice if this returned deterministic results.
+        // TODO would be nice if this iterated over results rather than collected them.
+        // TODO make this respect a limit.
+        fn search_docs(s: &Shard, re: &Regex, range: Range<u32>) -> Vec<DocMatches> {
+            if range.end - range.start > 1 {
+                let partition = (range.end + range.start) / 2;
+                let (mut a, mut b) = rayon::join(
+                    || search_docs(s, re, range.start..partition),
+                    || search_docs(s, re, partition..range.end),
+                );
+                a.append(&mut b);
+                return a;
+            }
+
+            let doc_id = range.start;
+            let matched_ranges = re
+                .find_iter(s.doc_content(doc_id))
+                .map(|m| m.start() as u32..m.end() as u32)
+                .collect::<Vec<Range<u32>>>();
+            if matched_ranges.len() > 0 {
+                vec![DocMatches {
+                    doc: doc_id,
+                    matched_ranges,
+                }]
+            } else {
+                Vec::new()
+            }
+        };
+        let num_docs = self.header.doc_starts_len as u32;
+        search_docs(self, &re, 0..num_docs)
+    }
 }
 
-struct DocumentIterator<'a> {
+pub struct DocMatches {
+    pub doc: DocID,
+    pub matched_ranges: Vec<Range<u32>>,
+}
+
+pub struct DocumentIterator<'a> {
     shard: &'a Shard,
     next_id: DocID,
+}
+
+impl<'a> DocumentIterator<'a> {
+    fn new(shard: &'a Shard) -> Self {
+        Self { shard, next_id: 0 }
+    }
 }
 
 impl<'a> Iterator for DocumentIterator<'a> {
