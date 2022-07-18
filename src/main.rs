@@ -3,7 +3,6 @@ pub mod shard;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
 use regex_syntax::ast::parse::Parser as AstParser;
-use regex_syntax::hir::translate::Translator;
 use shard::{RangesBuilder, Shard};
 use std::env;
 use std::error::Error;
@@ -70,12 +69,11 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
     if skip_index {
         let matches = s.search_skip_index(re);
         for m in matches {
-            println!("Doc #{}", m.doc);
-            let doc_content = s.doc_content(m.doc);
+            println!("Doc #{}", m.doc.id);
             for r in m.matched_ranges {
                 println!(
                     "\t{}",
-                    std::str::from_utf8(&doc_content[r.start as usize..r.end as usize])?
+                    std::str::from_utf8(&m.doc.content[r.start as usize..r.end as usize])?
                 );
             }
         }

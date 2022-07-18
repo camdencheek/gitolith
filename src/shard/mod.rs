@@ -10,6 +10,8 @@ use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
 use rayon;
 use rayon::prelude::*;
+use regex_syntax::ast::Ast;
+use regex_syntax::hir::translate::Translator;
 use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
@@ -18,9 +20,10 @@ use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::thread;
+mod docs;
+use docs::{Doc, DocID, Docs};
 
 pub type ShardID = u32;
-pub type DocID = u32;
 pub type SuffixID = u32;
 
 pub struct Shard {
@@ -164,41 +167,8 @@ impl Shard {
         &self.content()[idx as usize..]
     }
 
-    pub fn doc_content_range(&self, id: u32) -> Range<usize> {
-        self.doc_start(id) as usize..self.doc_end(id) as usize
-    }
-
-    pub fn doc_start(&self, id: u32) -> u32 {
-        let starts = self.doc_starts();
-        starts[id as usize]
-    }
-
-    pub fn doc_end(&self, id: u32) -> u32 {
-        match self.doc_starts().get(id as usize + 1) {
-            // We subtract one to remove the trailing zero byte
-            Some(&next_start) => next_start - 1,
-            None => self.header.content_len as u32 - 1,
-        }
-    }
-
-    pub fn doc_content(&self, id: u32) -> &[u8] {
-        &self.content()[self.doc_content_range(id)]
-    }
-
-    pub fn doc_from_suffix(&self, suffix: u32) -> u32 {
-        let starts = self.doc_starts();
-        let (mut low, mut high) = (0usize, starts.len());
-        while low != high {
-            let mid = (low + high) / 2;
-            if self.doc_start(mid as u32) > suffix {
-                high = mid - 1
-            } else if self.doc_end(mid as u32) < suffix {
-                low = mid + 1
-            } else {
-                return mid as u32;
-            }
-        }
-        low as u32
+    pub fn docs(&self) -> Docs<'_> {
+        Docs::new(0, self.doc_starts(), self.content())
     }
 
     // returns a slice of all prefixes that start with the literal needle
@@ -239,36 +209,29 @@ impl Shard {
         }) as SuffixIdx
     }
 
-    pub fn docs(&self) -> DocumentIterator<'_> {
-        DocumentIterator::new(self)
-    }
-
     pub fn search_skip_index(&self, re: Regex) -> Vec<DocMatches> {
         // Quick and dirty work-stealing with rayon.
         // TODO would be nice if this returned deterministic results.
         // TODO would be nice if this iterated over results rather than collected them.
         // TODO make this respect a limit.
-        fn search_docs<'a>(s: &'a Shard, re: &Regex, range: Range<u32>) -> Vec<DocMatches<'a>> {
-            if range.end - range.start > 1 {
-                let partition = (range.end + range.start) / 2;
+        fn search_docs<'a>(re: &Regex, docs: Docs<'a>) -> Vec<DocMatches<'a>> {
+            if docs.len() > 1 {
+                let partition = docs.len() / 2;
                 let (mut a, mut b) = rayon::join(
-                    || search_docs(s, re, range.start..partition),
-                    || search_docs(s, re, partition..range.end),
+                    || search_docs(re, docs.index(..partition)),
+                    || search_docs(re, docs.index(partition..)),
                 );
                 a.append(&mut b);
                 return a;
             }
-
-            let doc_id = range.start;
-            let content = s.doc_content(doc_id);
+            let doc = docs.index(0);
             let matched_ranges = re
-                .find_iter(content)
+                .find_iter(doc.content)
                 .map(|m| m.start() as u32..m.end() as u32)
                 .collect::<Vec<Range<u32>>>();
             if matched_ranges.len() > 0 {
                 vec![DocMatches {
-                    doc: doc_id,
-                    content: content,
+                    doc,
                     matched_ranges,
                 }]
             } else {
@@ -276,74 +239,41 @@ impl Shard {
             }
         };
         let num_docs = self.header.doc_starts_len as u32;
-        search_docs(self, &re, 0..num_docs)
+        search_docs(&re, self.docs())
     }
 
-    pub fn search_skip_index_iter<'a, 'b: 'a>(
-        &'a self,
-        re: &'b Regex,
-    ) -> impl Iterator<Item = DocMatches<'a>> {
-        let num_docs = self.header.doc_starts_len as u32;
-        chunk_doc_range(0..num_docs, 64)
-            .map(|chunk| {
-                chunk
-                    .into_iter()
-                    .collect::<Vec<DocID>>()
-                    .into_par_iter()
-                    .map(|doc_id| DocMatches {
-                        doc: doc_id,
-                        content: self.doc_content(doc_id),
-                        matched_ranges: re
-                            .find_iter(self.doc_content(doc_id))
-                            .map(|range| range.start() as u32..range.end() as u32)
-                            .collect(),
-                    })
-                    .filter(|m| m.matched_ranges.len() > 0)
-                    .collect::<Vec<DocMatches<'a>>>()
-            })
-            .flatten()
-    }
-}
+    pub fn search(&self, re: Regex) -> impl Iterator<Item = DocMatches<'_>> {
+        let ast = AstParser::new()
+            .parse(re.as_str())
+            .expect("regex str failed to parse as AST");
+        let hir = Translator::new()
+            .translate(re.as_str(), &ast)
+            .expect("regex str failed to parse for translator");
+        dbg!(&hir);
+        let range_iters = RangesBuilder::from_hir(hir).build();
 
-fn chunk_doc_range(range: Range<DocID>, chunk_size: u32) -> impl Iterator<Item = Range<DocID>> {
-    range
-        .clone()
-        .step_by(chunk_size as usize)
-        .map(move |block_start| {
-            let block_end = (block_start + chunk_size).min(range.end);
-            block_start..block_end
-        })
+        // for doc in s.docs() {
+        //     for mat in re.find_iter(doc.1) {
+        //         println!("{:?}", std::str::from_utf8(mat.as_bytes())?);
+        //     }
+        // }
+        for range_iter in range_iters {
+            for range in range_iter {
+                debug_range(&range);
+                for suffix_idx in s.sa_range(range) {
+                    println!(
+                        "{}",
+                        String::from_utf8(s.suffix(*suffix_idx)[..5].to_vec())?
+                    );
+                }
+            }
+        }
+    }
 }
 
 pub struct DocMatches<'a> {
-    pub doc: DocID,
-    pub content: &'a [u8],
+    pub doc: Doc<'a>,
     pub matched_ranges: Vec<Range<u32>>,
-}
-
-pub struct DocumentIterator<'a> {
-    shard: &'a Shard,
-    next_id: DocID,
-}
-
-impl<'a> DocumentIterator<'a> {
-    fn new(shard: &'a Shard) -> Self {
-        Self { shard, next_id: 0 }
-    }
-}
-
-impl<'a> Iterator for DocumentIterator<'a> {
-    type Item = (DocID, &'a [u8]);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next_id >= self.shard.header.doc_starts_len as u32 {
-            None
-        } else {
-            let res = Some((self.next_id, self.shard.doc_content(self.next_id as u32)));
-            self.next_id += 1;
-            res
-        }
-    }
 }
 
 #[repr(C)]
