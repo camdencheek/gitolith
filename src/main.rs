@@ -78,38 +78,11 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
             }
         }
     } else {
-        let ast = AstParser::new().parse(query)?;
-        let hir = Translator::new().translate(query, &ast)?;
-        dbg!(&hir);
-        let range_iters = RangesBuilder::from_hir(hir).build();
-
-        // for doc in s.docs() {
-        //     for mat in re.find_iter(doc.1) {
-        //         println!("{:?}", std::str::from_utf8(mat.as_bytes())?);
-        //     }
-        // }
-        for range_iter in range_iters {
-            for range in range_iter {
-                debug_range(&range);
-                for suffix_idx in s.sa_range(range) {
-                    println!(
-                        "{}",
-                        String::from_utf8(s.suffix(*suffix_idx)[..5].to_vec())?
-                    );
-                }
-            }
-        }
+        let matches = s.search(re);
+        for m in matches {}
     }
 
     Ok(())
-}
-
-fn debug_range(r: &RangeInclusive<Vec<u8>>) {
-    println!(
-        "{}..{}",
-        std::str::from_utf8(&r.start()).unwrap(),
-        std::str::from_utf8(&r.end()).unwrap()
-    );
 }
 
 fn search_literal(s: Shard, query: &str) -> Result<(), Box<dyn Error>> {

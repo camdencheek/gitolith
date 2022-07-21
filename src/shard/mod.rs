@@ -10,8 +10,6 @@ use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
 use rayon;
 use rayon::prelude::*;
-use regex_syntax::ast::Ast;
-use regex_syntax::hir::translate::Translator;
 use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
 use std::io::{self, Error, Read, Seek, SeekFrom, Write};
@@ -176,7 +174,7 @@ impl Shard {
         &self.sa()[self.sa_find_start(needle) as usize..self.sa_find_end(needle) as usize]
     }
 
-    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> &[u32]
+    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> &[SuffixIdx]
     where
         T: AsRef<[u8]> + Ord,
     {
@@ -242,33 +240,7 @@ impl Shard {
         search_docs(&re, self.docs())
     }
 
-    pub fn search(&self, re: Regex) -> impl Iterator<Item = DocMatches<'_>> {
-        let ast = AstParser::new()
-            .parse(re.as_str())
-            .expect("regex str failed to parse as AST");
-        let hir = Translator::new()
-            .translate(re.as_str(), &ast)
-            .expect("regex str failed to parse for translator");
-        dbg!(&hir);
-        let range_iters = RangesBuilder::from_hir(hir).build();
-
-        // for doc in s.docs() {
-        //     for mat in re.find_iter(doc.1) {
-        //         println!("{:?}", std::str::from_utf8(mat.as_bytes())?);
-        //     }
-        // }
-        for range_iter in range_iters {
-            for range in range_iter {
-                debug_range(&range);
-                for suffix_idx in s.sa_range(range) {
-                    println!(
-                        "{}",
-                        String::from_utf8(s.suffix(*suffix_idx)[..5].to_vec())?
-                    );
-                }
-            }
-        }
-    }
+    pub fn search(&self, re: Regex) {}
 }
 
 pub struct DocMatches<'a> {

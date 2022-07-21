@@ -5,7 +5,18 @@ pub type DocID = u32;
 #[derive(Copy, Clone)]
 pub struct Doc<'a> {
     pub id: DocID,
+    content_start: u32,
     pub content: &'a [u8],
+}
+
+impl<'a> Doc<'a> {
+    pub fn start(&self) -> u32 {
+        self.content_start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.content_start + self.content.len() as u32
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -132,6 +143,7 @@ impl<'a> DocsIndex<'a> for u32 {
         };
         Doc {
             id: docs.start_id + *self,
+            content_start: content_start as u32,
             content: &docs.content[content_start..content_end],
         }
     }
