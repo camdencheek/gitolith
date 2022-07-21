@@ -56,19 +56,9 @@ impl<'a> Docs<'a> {
         }
     }
 
-    // fn find_suffix(&self, suffix: u32) -> DocID {
-    //     let (mut low, mut high) = (0usize, starts.len());
-    //     while low != high {
-    //         let mid = (low + high) / 2;
-    //         if self.doc_start(mid as u32) > suffix {
-    //             high = mid - 1
-    //         } else if self.doc_end(mid as u32) < suffix {
-    //             low = mid + 1
-    //         } else {
-    //             return mid as u32;
-    //         }
-    //     }
-    // }
+    fn content_start(&self) -> u32 {
+        self.start_offsets[0]
+    }
 }
 
 impl<'a> IntoIterator for Docs<'a> {
@@ -102,9 +92,12 @@ impl<'a> DocsIndex<'a> for Range<u32> {
     type Output = Docs<'a>;
 
     fn index(&self, docs: &Docs<'a>) -> Docs<'a> {
-        let content_start = docs.start_offsets[self.start as usize] as usize;
+        let content_start = match docs.start_offsets.get(self.start as usize) {
+            Some(off) => *off as usize - docs.start_offsets[0] as usize,
+            None => docs.content.len(),
+        };
         let content_end = match docs.start_offsets.get(self.end as usize) {
-            Some(off) => *off as usize,
+            Some(off) => *off as usize - docs.start_offsets[0] as usize,
             None => docs.content.len(),
         };
 
@@ -136,15 +129,21 @@ impl<'a> DocsIndex<'a> for u32 {
     type Output = Doc<'a>;
 
     fn index(&self, docs: &Docs<'a>) -> Doc<'a> {
-        let content_start = docs.start_offsets[*self as usize] as usize;
+        let content_start =
+            docs.start_offsets[*self as usize] as usize - docs.content_start() as usize;
         let content_end = match docs.start_offsets.get(*self as usize + 1) {
-            Some(off) => *off as usize - 1,
+            Some(off) => *off as usize - 1 - docs.content_start() as usize,
             None => docs.content.len() - 1,
         };
         Doc {
             id: docs.start_id + *self,
-            content_start: content_start as u32,
+            content_start: docs.start_offsets[*self as usize],
             content: &docs.content[content_start..content_end],
         }
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
 }

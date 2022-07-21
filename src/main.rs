@@ -3,7 +3,7 @@ pub mod shard;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
 use regex_syntax::ast::parse::Parser as AstParser;
-use shard::{RangesBuilder, Shard};
+use shard::Shard;
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -22,6 +22,7 @@ pub struct Cli {
 pub enum Command {
     Index(IndexArgs),
     Search(SearchArgs),
+    List(ListArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -42,11 +43,17 @@ pub struct SearchArgs {
     pub skip_index: bool,
 }
 
+#[derive(Parser, Debug)]
+pub struct ListArgs {
+    pub shard: PathBuf,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
     match args.cmd {
         Command::Index(a) => build_index(a)?,
         Command::Search(a) => search(a)?,
+        Command::List(a) => list(a)?,
     }
     Ok(())
 }
@@ -61,6 +68,19 @@ fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
     } else {
         search_literal(s, query)
     }
+}
+
+fn list(args: ListArgs) -> Result<(), Box<dyn Error>> {
+    let s = Shard::open(0, &args.shard)?;
+
+    for doc in s.docs() {
+        println!("DocID: {}", doc.id);
+        print!(
+            "===============\n{}\n==============\n",
+            std::str::from_utf8(doc.content).unwrap()
+        );
+    }
+    Ok(())
 }
 
 fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn Error>> {
@@ -78,8 +98,17 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
             }
         }
     } else {
-        let matches = s.search(re);
-        for m in matches {}
+        let matches = s.search(&re);
+        for m in matches {
+            println!("DocID: {}", m.doc.id);
+            for range in m.matches {
+                println!(
+                    "{}",
+                    std::str::from_utf8(&m.doc.content[range.start as usize..range.end as usize])
+                        .unwrap()
+                );
+            }
+        }
     }
 
     Ok(())

@@ -240,7 +240,12 @@ impl Shard {
         search_docs(&re, self.docs())
     }
 
-    pub fn search(&self, re: Regex) {}
+    pub fn search<'a, 'b: 'a>(
+        &'a self,
+        re: &'b Regex,
+    ) -> Box<dyn Iterator<Item = regex::DocMatches<'a>> + 'a> {
+        regex::new_regex_iter(self, &re)
+    }
 }
 
 pub struct DocMatches<'a> {

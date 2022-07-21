@@ -8,9 +8,9 @@ use regex_syntax::hir::{self, Hir};
 use std::error::Error;
 use std::ops::{Range, RangeInclusive};
 
-struct DocMatches<'a> {
-    doc: Doc<'a>,
-    matches: Vec<Range<u32>>,
+pub struct DocMatches<'a> {
+    pub doc: Doc<'a>,
+    pub matches: Vec<Range<u32>>,
 }
 
 struct CheckingDocMatchIterator<'a, 'b, T>
@@ -25,7 +25,7 @@ impl<'a, 'b, T> CheckingDocMatchIterator<'a, 'b, T>
 where
     T: Iterator<Item = Doc<'a>>,
 {
-    fn new(docs: T, re: &Regex) -> Self {
+    fn new(docs: T, re: &'b Regex) -> Self {
         Self { docs, re }
     }
 }
@@ -53,35 +53,28 @@ where
 
 struct SuffixSortingIterator<'a> {
     shard: &'a Shard,
-    prefix_ranges: PrefixRangeIter,
-    collected: Option<<Vec<SuffixIdx> as IntoIterator>::IntoIter>,
+    collected: <Vec<SuffixIdx> as IntoIterator>::IntoIter,
 }
 
 impl<'a> SuffixSortingIterator<'a> {
     fn new(shard: &'a Shard, prefix_ranges: PrefixRangeIter) -> Self {
-        Self {
-            shard,
-            prefix_ranges,
-            collected: None,
-        }
-    }
-
-    fn collect(&mut self) -> Vec<SuffixIdx> {
-        // TODO the collected set of suffixes could be pretty large.
-        // We should probably be allocating this with a request-scoped
-        // allocator, or a mmap-ed region.
-        let collected = self
-            .prefix_ranges
-            .map(|pr| self.shard.sa_range(pr))
+        let mut collected = prefix_ranges
+            .map(|pr| shard.sa_range(pr))
             .flatten()
             .map(|idx| *idx)
             .collect::<Vec<SuffixIdx>>();
+        // TODO the collected set of suffixes could be pretty large.
+        // We should probably be allocating this with a request-scoped
+        // allocator, or a mmap-ed region.
         // TODO we don't need to sort the whole thing up front,
         // we only need to ensure that the next suffix we yield
         // is the minimum of the remaining. We could do some sort
         // of streaming merge sort here to avoid doing extra work.
         collected.par_sort();
-        collected
+        Self {
+            shard,
+            collected: collected.into_iter(),
+        }
     }
 }
 
@@ -89,14 +82,7 @@ impl<'a> Iterator for SuffixSortingIterator<'a> {
     type Item = SuffixIdx; // TODO type this as SuffixIdx or something
 
     fn next(&mut self) -> Option<SuffixIdx> {
-        match self.collected {
-            Some(c) => c.next(),
-            None => {
-                let c = self.collect().into_iter();
-                self.collected = Some(c);
-                self.next()
-            }
-        }
+        self.collected.next()
     }
 }
 
@@ -115,7 +101,7 @@ where
     fn new(docs: Docs<'a>, suffixes: Vec<T>) -> Self {
         Self {
             docs: docs.into_iter().peekable(),
-            suffix_iterators: suffixes.iter().map(|it| it.peekable()).collect(),
+            suffix_iterators: suffixes.into_iter().map(|it| it.peekable()).collect(),
         }
     }
 }
@@ -129,8 +115,8 @@ where
     fn next(&mut self) -> Option<Doc<'a>> {
         let next_doc = self.docs.peek()?;
         // Advance each child so next() is not before the current doc.
-        let min_suffix: Option<u32> = None;
-        for child in self.suffix_iterators {
+        let mut min_suffix: Option<u32> = None;
+        for child in self.suffix_iterators.iter_mut() {
             while let Some(&next) = child.peek() {
                 if next < next_doc.start() {
                     child.next();
@@ -157,10 +143,41 @@ where
     }
 }
 
-pub struct DocIterBuilder<'a, 'b> {
+pub fn new_regex_iter<'a, 'b: 'a>(
     shard: &'a Shard,
     re: &'b Regex,
+) -> Box<dyn Iterator<Item = DocMatches<'a>> + 'a> {
+    let ast = regex_syntax::ast::parse::Parser::new()
+        .parse(re.as_str())
+        .expect("regex str failed to parse as AST");
+    let hir = regex_syntax::hir::translate::Translator::new()
+        .translate(re.as_str(), &ast)
+        .expect("regex str failed to parse for translator");
+    let (ranges, exact) = RegexRangesBuilder::from_hir(hir);
 
+    if ranges.len() == 0 {
+        assert!(exact);
+        // The suffix array provides us no useful information, so just search all the docs.
+        Box::new(CheckingDocMatchIterator::new(shard.docs().into_iter(), re))
+    // TODO implement an exact iterator
+    // } else if self.exact {
+    //     assert!(self.complete.len() == 1);
+    //     ExactDocIterator::new(self.complete[0])
+    } else {
+        Box::new(CheckingDocMatchIterator::new(
+            InexactMergingIterator::new(
+                shard.docs(),
+                ranges
+                    .into_iter()
+                    .map(|it| SuffixSortingIterator::new(shard, it))
+                    .collect(),
+            ),
+            re,
+        ))
+    }
+}
+
+struct RegexRangesBuilder {
     // An iterator over the current set of prefixes being built, or
     // None if no prefix set has been started.
     current: Option<PrefixRangeIter>,
@@ -175,54 +192,24 @@ pub struct DocIterBuilder<'a, 'b> {
     exact: bool,
 }
 
-impl<'a, 'b> DocIterBuilder<'a, 'b> {
-    pub fn new(shard: &'a Shard, re: &'b Regex) -> Box<dyn Iterator<Item = DocMatches<'a>>> {
-        let s = Self {
-            shard,
-            re,
+impl RegexRangesBuilder {
+    pub fn from_hir(hir: Hir) -> (Vec<PrefixRangeIter>, bool) {
+        let mut s = Self {
             current: None,
             complete: Vec::new(),
             exact: true,
         };
-        let ast = regex_syntax::ast::parse::Parser::new()
-            .parse(re.as_str())
-            .expect("regex str failed to parse as AST");
-        let hir = regex_syntax::hir::translate::Translator::new()
-            .translate(re.as_str(), &ast)
-            .expect("regex str failed to parse for translator");
         s.push_hir(hir);
         s.build()
     }
 
     // build finalizes the builder and returns a set of prefix
     // ranges and whether the prefixes
-    pub fn build(mut self) -> Box<dyn Iterator<Item = DocMatches<'a>>> {
+    fn build(mut self) -> (Vec<PrefixRangeIter>, bool) {
         if let Some(cur) = self.current {
             self.complete.push(cur)
         }
-
-        if self.complete.len() == 0 {
-            assert!(self.exact);
-            // The suffix array provides us no useful information, so just search all the docs.
-            Box::new(CheckingDocMatchIterator::new(
-                self.shard.docs().into_iter(),
-                self.re,
-            ))
-        // } else if self.exact {
-        //     assert!(self.complete.len() == 1);
-        //     ExactDocIterator::new(self.complete[0])
-        } else {
-            Box::new(CheckingDocMatchIterator::new(
-                InexactMergingIterator::new(
-                    self.shard.docs(),
-                    self.complete
-                        .into_iter()
-                        .map(|it| SuffixSortingIterator::new(self.shard, it))
-                        .collect(),
-                ),
-                self.re,
-            ))
-        }
+        (self.complete, self.exact)
     }
 
     fn push_hir(&mut self, hir: Hir) {
@@ -330,8 +317,7 @@ impl<'a, 'b> DocIterBuilder<'a, 'b> {
         }
 
         for alt in &alts {
-            let v = SimpleHirChecker {};
-            if hir::visit(alt, v).is_err() {
+            if hir::visit(alt, SimpleHirChecker {}).is_err() {
                 self.cannot_handle();
                 return;
             };
@@ -340,7 +326,7 @@ impl<'a, 'b> DocIterBuilder<'a, 'b> {
         // If we got here, all children are simple patterns.
         let mut alt_iters = Vec::with_capacity(alts.len());
         for alt in alts {
-            let mut built = Self::from_hir(alt).build();
+            let (mut built, _) = Self::from_hir(alt);
             debug_assert!(built.len() == 1);
             alt_iters.push(built.pop().unwrap());
         }
@@ -585,14 +571,15 @@ pub struct ByteClassAppender {
 impl ByteClassAppender {
     pub fn new(predecessor: PrefixRangeIter, class: hir::ClassBytes) -> Self {
         let (depth_low, depth_high) = predecessor.depth_hint();
+        let selectivity = predecessor.selectivity_hint()
+            * class
+                .iter()
+                .map(|r| (r.end() - r.start()) as f64 / 256f64)
+                .sum::<f64>();
         Self {
             product: Box::new(predecessor.cartesian_product(class.ranges().to_vec())),
             depth_hint: (depth_low + 1, depth_high.map(|i| i + 1)),
-            selectivity: predecessor.selectivity_hint()
-                * class
-                    .iter()
-                    .map(|r| (r.end() - r.start()) as f64 / 256f64)
-                    .sum::<f64>(),
+            selectivity,
         }
     }
 }
@@ -645,17 +632,19 @@ impl UnicodeClassAppender {
             .expect("ranges should never be empty")
             .end()
             .len_utf8();
+
+        let selectivity = predecessor.selectivity_hint()
+            * class
+                .iter()
+                .map(|r| (u32::from(r.end()) - u32::from(r.start())) as f64 / 144_697f64)
+                .sum::<f64>();
         Self {
             product: Box::new(predecessor.cartesian_product(UnicodeRangeSplitIterator::new(class))),
             depth_hint: (
                 depth_low + min_char_len,
                 depth_high.map(|i| i + max_char_len),
             ),
-            selectivity: predecessor.selectivity_hint()
-                * class
-                    .iter()
-                    .map(|r| (u32::from(r.end()) - u32::from(r.start())) as f64 / 144_697f64)
-                    .sum::<f64>(),
+            selectivity,
         }
     }
 }
@@ -712,14 +701,15 @@ impl AlternationAppender {
             };
             (new_min, new_max)
         });
+        let selectivity = pred.selectivity_hint()
+            * alts
+                .iter()
+                .map(PrefixRangeIter::selectivity_hint)
+                .sum::<f64>();
         Self {
             product: Box::new(pred.cartesian_product(alts.into_iter().flatten())),
             depth_hint,
-            selectivity: pred.selectivity_hint()
-                * alts
-                    .iter()
-                    .map(PrefixRangeIter::selectivity_hint)
-                    .sum::<f64>(),
+            selectivity,
         }
     }
 }
