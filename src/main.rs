@@ -1,14 +1,10 @@
-#![allow(unused)]
 pub mod shard;
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use crate::shard::Shard;
+use clap::{Parser, Subcommand};
 use regex::bytes::Regex;
-use regex_syntax::ast::parse::Parser as AstParser;
-use shard::Shard;
-use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::ops::{Range, RangeInclusive};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -59,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
-    let s = Shard::open(0, &args.shard)?;
+    let s = Shard::open(&args.shard)?;
 
     let mut query = args.query.as_str();
     if query.starts_with('/') && query.ends_with('/') && query.len() >= 2 {
@@ -71,7 +67,7 @@ fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
 }
 
 fn list(args: ListArgs) -> Result<(), Box<dyn Error>> {
-    let s = Shard::open(0, &args.shard)?;
+    let s = Shard::open(&args.shard)?;
 
     let handle = std::io::stdout().lock();
     let mut buf = std::io::BufWriter::new(handle);
@@ -149,13 +145,13 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Box<
             f: None,
         });
 
-    let s = Shard::new(0, &Path::new(&output_shard), documents)?;
+    let _s = Shard::new(0, &Path::new(&output_shard), documents)?;
     Ok(())
 }
 
 fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Box<dyn Error>> {
     let documents = std::iter::once(s.as_bytes());
-    let s = Shard::new(0, &Path::new(&output_shard), documents)?;
+    let _s = Shard::new(0, &Path::new(&output_shard), documents)?;
     Ok(())
 }
 

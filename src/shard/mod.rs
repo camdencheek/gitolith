@@ -5,19 +5,16 @@ pub use self::regex::*;
 use self::suffix::SuffixIdx;
 use ::regex::bytes::Regex;
 use ::suffix as suf;
-use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
 use rayon;
-use rayon::prelude::*;
-use regex_syntax::hir::{self, Hir, HirKind};
 use std::fs::File;
-use std::io::{self, Error, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::iter::Iterator;
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 mod docs;
-use docs::{Doc, DocID, Docs};
+use docs::{Doc, Docs};
 
 pub type ShardID = u32;
 pub type SuffixID = u32;
@@ -47,7 +44,7 @@ impl Shard {
             id,
             ..ShardHeader::default()
         };
-        f.seek(SeekFrom::Start(ShardHeader::HEADER_SIZE as u64));
+        f.seek(SeekFrom::Start(ShardHeader::HEADER_SIZE as u64))?;
 
         // Content starts immediately after the header
         header.content_ptr = ShardHeader::HEADER_SIZE as u64;
@@ -60,7 +57,7 @@ impl Shard {
             let doc_len = io::copy(&mut doc, &mut f)?;
             if header.content_len + doc_len + 1 >= u32::MAX.into() {
                 // truncate file back to the length before hitting the limit
-                f.set_len(header.content_ptr + current_doc_start as u64);
+                f.set_len(header.content_ptr + current_doc_start as u64)?;
                 break;
             }
 
@@ -88,7 +85,7 @@ impl Shard {
 
         let file_size = header.sa_ptr + header.sa_len * std::mem::size_of::<u32>() as u64;
         dbg!(file_size);
-        f.set_len(file_size);
+        f.set_len(file_size)?;
 
         dbg!(&header);
         f.write_at(&header.to_bytes(), 0)?;
@@ -119,8 +116,8 @@ impl Shard {
         Self::from_mmap(mmap.make_read_only()?)
     }
 
-    pub fn open(id: ShardID, path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut f = File::open(path)?;
+    pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let f = File::open(path)?;
         let mmap = unsafe { Mmap::map(&f)? };
         Self::from_mmap(mmap)
     }
@@ -233,8 +230,7 @@ impl Shard {
             } else {
                 Vec::new()
             }
-        };
-        let num_docs = self.header.doc_starts_len as u32;
+        }
         search_docs(&re, self.docs())
     }
 
@@ -273,16 +269,16 @@ impl ShardHeader {
     // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
-        buf.write(&self.version.to_le_bytes());
-        buf.write(&self.flags.to_le_bytes());
-        buf.write(&self.id.to_le_bytes());
-        buf.write(&self.content_ptr.to_le_bytes());
+        buf.write(&self.version.to_le_bytes()).unwrap();
+        buf.write(&self.flags.to_le_bytes()).unwrap();
+        buf.write(&self.id.to_le_bytes()).unwrap();
+        buf.write(&self.content_ptr.to_le_bytes()).unwrap();
         dbg!(&self.content_ptr);
-        buf.write(&self.content_len.to_le_bytes());
-        buf.write(&self.doc_starts_ptr.to_le_bytes());
-        buf.write(&self.doc_starts_len.to_le_bytes());
-        buf.write(&self.sa_ptr.to_le_bytes());
-        buf.write(&self.sa_len.to_le_bytes());
+        buf.write(&self.content_len.to_le_bytes()).unwrap();
+        buf.write(&self.doc_starts_ptr.to_le_bytes()).unwrap();
+        buf.write(&self.doc_starts_len.to_le_bytes()).unwrap();
+        buf.write(&self.sa_ptr.to_le_bytes()).unwrap();
+        buf.write(&self.sa_len.to_le_bytes()).unwrap();
         buf
     }
 
@@ -323,8 +319,6 @@ mod test {
     use ::regex::bytes::Regex;
     use std::error::Error;
     use std::io::Cursor;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     fn corpus(strs: Vec<&str>) -> impl Iterator<Item = Cursor<&str>> {
         strs.into_iter().map(|s| Cursor::new(s))

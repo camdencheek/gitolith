@@ -1,11 +1,10 @@
 use super::docs::{Doc, Docs, DocsIterator};
-use super::suffix::{SuffixArray, SuffixIdx};
+use super::suffix::SuffixIdx;
 use super::Shard;
 use itertools::{Itertools, Product};
 use rayon::prelude::*;
 use regex::bytes::Regex;
 use regex_syntax::hir::{self, Hir};
-use std::error::Error;
 use std::ops::{Range, RangeInclusive};
 
 pub struct DocMatches<'a> {
@@ -51,13 +50,12 @@ where
     }
 }
 
-struct SuffixSortingIterator<'a> {
-    shard: &'a Shard,
+struct SuffixSortingIterator {
     collected: <Vec<SuffixIdx> as IntoIterator>::IntoIter,
 }
 
-impl<'a> SuffixSortingIterator<'a> {
-    fn new(shard: &'a Shard, prefix_ranges: PrefixRangeIter) -> Self {
+impl SuffixSortingIterator {
+    fn new<'a>(shard: &'a Shard, prefix_ranges: PrefixRangeIter) -> Self {
         let mut collected = prefix_ranges
             .map(|pr| shard.sa_range(pr))
             .flatten()
@@ -72,13 +70,12 @@ impl<'a> SuffixSortingIterator<'a> {
         // of streaming merge sort here to avoid doing extra work.
         collected.par_sort();
         Self {
-            shard,
             collected: collected.into_iter(),
         }
     }
 }
 
-impl<'a> Iterator for SuffixSortingIterator<'a> {
+impl Iterator for SuffixSortingIterator {
     type Item = SuffixIdx; // TODO type this as SuffixIdx or something
 
     fn next(&mut self) -> Option<SuffixIdx> {
@@ -156,7 +153,6 @@ where
             }
             (child_min, child_max) = self.advance_children_to(next_doc.start())?;
         }
-        None
     }
 }
 
@@ -170,7 +166,7 @@ pub fn new_regex_iter<'a, 'b: 'a>(
     let hir = regex_syntax::hir::translate::Translator::new()
         .translate(re.as_str(), &ast)
         .expect("regex str failed to parse for translator");
-    let (ranges, exact) = RegexRangesBuilder::from_hir(hir);
+    let (ranges, _exact) = RegexRangesBuilder::from_hir(hir);
 
     if ranges.len() == 0 {
         // The suffix array provides us no useful information, so just search all the docs.
@@ -353,15 +349,15 @@ impl RegexRangesBuilder {
         *open = PrefixRangeIter::Alternation(AlternationAppender::new(open.clone(), alt_iters))
     }
 
-    fn push_anchor(&mut self, anchor: hir::Anchor) {
+    fn push_anchor(&mut self, _anchor: hir::Anchor) {
         self.cannot_handle();
     }
 
-    fn push_word_boundary(&mut self, wb: hir::WordBoundary) {
+    fn push_word_boundary(&mut self, _wb: hir::WordBoundary) {
         self.cannot_handle();
     }
 
-    fn push_repetition(&mut self, rep: hir::Repetition) {
+    fn push_repetition(&mut self, _rep: hir::Repetition) {
         self.cannot_handle();
     }
 }
@@ -710,7 +706,7 @@ impl AlternationAppender {
     fn new(pred: PrefixRangeIter, alts: Vec<PrefixRangeIter>) -> Self {
         assert!(!alts.is_empty());
         let (base_low, base_high) = pred.depth_hint();
-        let depth_hint = alts.iter().fold((usize::MAX, Some(0)), |acc, it| {
+        let (alt_low, alt_high) = alts.iter().fold((usize::MAX, Some(0)), |acc, it| {
             let (l, h) = it.depth_hint();
             let new_min = usize::min(acc.0, l);
             let new_max = match (acc.1, h) {
@@ -726,7 +722,10 @@ impl AlternationAppender {
                 .sum::<f64>();
         Self {
             product: Box::new(pred.cartesian_product(alts.into_iter().flatten())),
-            depth_hint,
+            depth_hint: (
+                base_low + alt_low,
+                base_high.and_then(|b| alt_high.map(|h| b + h)),
+            ),
             selectivity,
         }
     }
