@@ -1,5 +1,5 @@
 use super::docs::{Doc, DocID, DocSlice};
-use super::suffix::SuffixIdx;
+use super::suffix::{SuffixArray, SuffixIdx};
 use super::Shard;
 use itertools::{Itertools, Product};
 use rayon::prelude::*;
@@ -141,10 +141,11 @@ struct SuffixSortingIterator {
 
 impl SuffixSortingIterator {
     fn new<'a>(shard: &'a Shard, prefix_ranges: PrefixRangeIter) -> Self {
+        let sa = shard.sa();
         let mut collected = prefix_ranges
-            .map(|pr| shard.sa_slice(pr))
+            .map(|pr| sa.find(pr))
             .flatten()
-            .map(|idx| *idx)
+            .map(|idx| idx)
             .collect::<Vec<SuffixIdx>>();
         // TODO the collected set of suffixes could be pretty large.
         // We should probably be allocating this with a request-scoped
@@ -272,14 +273,17 @@ pub fn new_regex_iter<'a, 'b: 'a>(
     //         re,
     //     ))
     } else {
+        let sa = shard.sa();
+        let prs = ranges
+            .into_iter()
+            .map(|prefix_iter| {
+                prefix_iter
+                    .map(move |prefix_range| sa.find(prefix_range))
+                    .flatten()
+            })
+            .collect();
         Box::new(CheckingDocMatchIterator::new(
-            DocBitmapAllIterator::new(
-                shard.docs(),
-                ranges
-                    .into_iter()
-                    .map(|it| it.map(|pr| shard.sa_slice(pr)).flatten().cloned())
-                    .collect(),
-            ),
+            DocBitmapAllIterator::new(shard.docs(), prs),
             re,
         ))
     }

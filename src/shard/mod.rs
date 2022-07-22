@@ -2,7 +2,7 @@ mod regex;
 mod suffix;
 
 pub use self::regex::*;
-use self::suffix::SuffixIdx;
+use self::suffix::SuffixArray;
 use ::regex::bytes::Regex;
 use ::suffix as suf;
 use memmap::{Mmap, MmapMut};
@@ -10,7 +10,7 @@ use rayon;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::iter::Iterator;
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 mod docs;
@@ -109,11 +109,28 @@ impl Shard {
         let mut bins = suf::Bins::new();
         suf::sais(sa, &mut stypes, &mut bins, &suf::Utf8(content));
 
+        let mut char_offsets = [0u32; 256];
+        for i in u8::MIN..=u8::MAX {
+            char_offsets[i as usize] = Self::find_char_offset(sa, content, i)
+        }
+
+        let mut char_offsets_buf: Vec<u8> =
+            Vec::with_capacity(char_offsets.len() * std::mem::size_of::<u32>());
+        for offset in char_offsets {
+            char_offsets_buf.write(&offset.to_le_bytes())?;
+        }
+        header.offsets_ptr = header.sa_ptr + header.sa_len * std::mem::size_of::<u32>() as u64;
+        f.write_at(&char_offsets_buf, header.offsets_ptr)?;
+
         println!("built suffix array");
         header.flags = 0; // unset incomplete flag
         f.write_at(&header.to_bytes(), 0)?;
 
         Self::from_mmap(mmap.make_read_only()?)
+    }
+
+    fn find_char_offset(sa: &[u32], content: &[u8], char: u8) -> u32 {
+        sa.partition_point(|idx| content[*idx as usize] < char) as u32
     }
 
     pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -138,22 +155,18 @@ impl Shard {
         }
     }
 
-    pub fn doc_starts(&self) -> &[u32] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.raw[self.header.doc_starts_ptr as usize..].as_ptr() as *const u32,
-                self.header.doc_starts_len as usize,
-            )
-        }
-    }
-
-    pub fn sa(&self) -> &[u32] {
-        unsafe {
+    pub fn sa(&self) -> SuffixArray<'_> {
+        let suffixes = unsafe {
             std::slice::from_raw_parts(
                 self.raw[self.header.sa_ptr as usize..].as_ptr() as *const u32,
                 self.header.sa_len as usize,
             )
-        }
+        };
+        SuffixArray::new(suffixes, self.content(), self.char_offsets())
+    }
+
+    fn char_offsets(&self) -> &[u32; 256] {
+        unsafe { &*(self.raw[self.header.offsets_ptr as usize..].as_ptr() as *const [u32; 256]) }
     }
 
     pub fn suffix(&self, idx: u32) -> &[u8] {
@@ -164,50 +177,13 @@ impl Shard {
         DocSlice::new(0, self.doc_starts(), self.content())
     }
 
-    // returns a slice of all prefixes that start with the literal needle
-    pub fn sa_prefixes(&self, needle: &[u8]) -> &[u32] {
-        &self.sa()[self.sa_find_start(needle) as usize..self.sa_find_end(needle) as usize]
-    }
-
-    pub fn sa_slice<T>(&self, r: RangeInclusive<T>) -> &[SuffixIdx]
-    where
-        T: AsRef<[u8]> + Ord,
-    {
-        debug_assert!(r.start() <= r.end());
-        &self.sa()[self.sa_find_start(r.start().as_ref()) as usize
-            ..self.sa_find_end(r.end().as_ref()) as usize]
-    }
-
-    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> Range<SuffixIdx>
-    where
-        T: AsRef<[u8]> + Ord,
-    {
-        debug_assert!(r.start() <= r.end());
-        self.sa_find_start(r.start().as_ref())..self.sa_find_end(r.end().as_ref())
-    }
-
-    // finds the index of the first suffix whose prefix is greater than or equal to needle
-    pub fn sa_find_start(&self, needle: &[u8]) -> SuffixIdx {
-        let sa = self.sa();
-        let content = self.content();
-        sa.partition_point(|idx| {
-            let suf_start = *idx as usize;
-            let suf_end = usize::min(suf_start + needle.len(), content.len());
-            let suf = &content[suf_start..suf_end];
-            suf < needle
-        }) as SuffixIdx
-    }
-
-    // finds the index of the first suffix whose prefix is greater than needle
-    pub fn sa_find_end(&self, needle: &[u8]) -> SuffixIdx {
-        let sa = self.sa();
-        let content = self.content();
-        sa.partition_point(|&idx| {
-            let suf_start = idx as usize;
-            let suf_end = usize::min(suf_start + needle.len(), content.len());
-            let suf = &content[suf_start..suf_end];
-            suf <= needle
-        }) as SuffixIdx
+    fn doc_starts(&self) -> &[u32] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.raw[self.header.doc_starts_ptr as usize..].as_ptr() as *const u32,
+                self.header.doc_starts_len as usize,
+            )
+        }
     }
 
     pub fn search_skip_index(&self, re: Regex) -> Vec<DocMatches> {
@@ -267,12 +243,15 @@ pub struct ShardHeader {
     pub doc_starts_len: u64,
     pub sa_ptr: u64,
     pub sa_len: u64,
+    pub offsets_ptr: u64,
 }
 
 impl ShardHeader {
     const VERSION: u16 = 1;
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_INCOMPLETE: u16 = 1 << 0;
+
+    const OFFSETS_LEN: usize = 256;
 
     // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -287,6 +266,7 @@ impl ShardHeader {
         buf.write(&self.doc_starts_len.to_le_bytes()).unwrap();
         buf.write(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write(&self.sa_len.to_le_bytes()).unwrap();
+        buf.write(&self.offsets_ptr.to_le_bytes()).unwrap();
         buf
     }
 
@@ -301,6 +281,7 @@ impl ShardHeader {
         s.doc_starts_len = u64::from_le_bytes(buf[32..40].try_into()?);
         s.sa_ptr = u64::from_le_bytes(buf[40..48].try_into()?);
         s.sa_len = u64::from_le_bytes(buf[48..56].try_into()?);
+        s.offsets_ptr = u64::from_le_bytes(buf[56..64].try_into()?);
         Ok(s)
     }
 }
@@ -317,6 +298,7 @@ impl Default for ShardHeader {
             doc_starts_len: 0,
             sa_ptr: 0,
             sa_len: 0,
+            offsets_ptr: 0,
         }
     }
 }

@@ -115,9 +115,9 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
 fn search_literal(s: Shard, query: &str) -> Result<(), Box<dyn Error>> {
     let b = query.as_bytes();
     dbg!(&b);
-    let matches = s.sa_prefixes(b);
+    let matches = s.sa().find(b..=b);
     for m in matches {
-        let mut suffix = s.suffix(*m);
+        let mut suffix = s.suffix(m);
         suffix = &suffix[..usize::min(suffix.len(), query.len())];
 
         println!("{}", String::from_utf8(suffix.to_vec())?);
