@@ -1,10 +1,11 @@
-use super::docs::{Doc, Docs, DocsIterator};
+use super::docs::{Doc, DocID, DocSlice};
 use super::suffix::SuffixIdx;
 use super::Shard;
 use itertools::{Itertools, Product};
 use rayon::prelude::*;
 use regex::bytes::Regex;
 use regex_syntax::hir::{self, Hir};
+use roaring::bitmap::RoaringBitmap;
 use std::ops::{Range, RangeInclusive};
 
 pub struct DocMatches<'a> {
@@ -17,6 +18,7 @@ where
     T: Iterator<Item = Doc<'a>>,
 {
     docs: T,
+    checked_docs: usize,
     re: &'b Regex,
 }
 
@@ -25,7 +27,11 @@ where
     T: Iterator<Item = Doc<'a>>,
 {
     fn new(docs: T, re: &'b Regex) -> Self {
-        Self { docs, re }
+        Self {
+            docs,
+            checked_docs: 0,
+            re,
+        }
     }
 }
 
@@ -37,6 +43,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(doc) = self.docs.next() {
+            self.checked_docs += 1;
             let matches: Vec<Range<u32>> = self
                 .re
                 .find_iter(doc.content)
@@ -46,7 +53,82 @@ where
                 return Some(DocMatches { doc, matches });
             }
         }
+        println!("Rechecked docs: {}", self.checked_docs);
         None
+    }
+}
+
+struct DocBitmapAllIterator<'a, T>
+where
+    T: Iterator<Item = SuffixIdx>,
+{
+    docs: DocSlice<'a>,
+    doc_bitmaps: Vec<RoaringBitmap>,
+    suffix_iters: Vec<T>,
+}
+
+impl<'a, T> DocBitmapAllIterator<'a, T>
+where
+    T: Iterator<Item = SuffixIdx>,
+{
+    pub fn new(docs: DocSlice<'a>, suffix_iters: Vec<T>) -> Self {
+        Self {
+            docs,
+            doc_bitmaps: vec![RoaringBitmap::new(); docs.len() as usize],
+            suffix_iters,
+        }
+    }
+
+    fn advance_child_to_doc(&mut self, child_num: usize, target_doc: DocID) -> bool {
+        // Check if we've already seen this doc for this child
+        if self.doc_bitmaps[child_num].contains(target_doc) {
+            return true;
+        }
+        // Otherwise, iterate over suffixes until we find one that is contained
+        // in the given doc.
+        let child = &mut self.suffix_iters[child_num];
+        for suffix in child {
+            if let Some(doc) = self.docs.find_by_suffix(suffix) {
+                if doc.id == target_doc {
+                    return true;
+                }
+                self.doc_bitmaps[child_num].insert(doc.id);
+            }
+        }
+        false
+    }
+}
+
+impl<'a, T> Iterator for DocBitmapAllIterator<'a, T>
+where
+    T: Iterator<Item = SuffixIdx>,
+{
+    type Item = Doc<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        'outer: loop {
+            let next_doc = self.docs.peek()?;
+
+            // If we have already seen this doc from all children, just return it.
+            if self.doc_bitmaps.iter().all(|bm| bm.contains(next_doc.id)) {
+                return Some(self.docs.next()?);
+            }
+
+            // TODO sort the child iterators so we hit the shortest ones first.
+
+            'inner: for child_num in 0..self.suffix_iters.len() {
+                let found = self.advance_child_to_doc(child_num, next_doc.id);
+                if found {
+                    continue 'inner;
+                } else {
+                    self.docs.next()?;
+                    continue 'outer;
+                }
+            }
+
+            // The current doc was found in all children
+            return Some(self.docs.next()?);
+        }
     }
 }
 
@@ -57,7 +139,7 @@ struct SuffixSortingIterator {
 impl SuffixSortingIterator {
     fn new<'a>(shard: &'a Shard, prefix_ranges: PrefixRangeIter) -> Self {
         let mut collected = prefix_ranges
-            .map(|pr| shard.sa_range(pr))
+            .map(|pr| shard.sa_slice(pr))
             .flatten()
             .map(|idx| *idx)
             .collect::<Vec<SuffixIdx>>();
@@ -87,7 +169,7 @@ pub struct InexactMergingIterator<'a, T>
 where
     T: Iterator<Item = SuffixIdx>,
 {
-    docs: std::iter::Peekable<DocsIterator<'a>>,
+    docs: std::iter::Peekable<DocSlice<'a>>,
     suffix_iterators: Vec<std::iter::Peekable<T>>,
 }
 
@@ -95,7 +177,7 @@ impl<'a, T> InexactMergingIterator<'a, T>
 where
     T: Iterator<Item = SuffixIdx>,
 {
-    fn new(docs: Docs<'a>, suffixes: Vec<T>) -> Self {
+    fn new(docs: DocSlice<'a>, suffixes: Vec<T>) -> Self {
         Self {
             docs: docs.into_iter().peekable(),
             suffix_iterators: suffixes.into_iter().map(|it| it.peekable()).collect(),
@@ -175,13 +257,24 @@ pub fn new_regex_iter<'a, 'b: 'a>(
     // } else if self.exact {
     //     assert!(self.complete.len() == 1);
     //     ExactDocIterator::new(self.complete[0])
+    // } else {
+    //     Box::new(CheckingDocMatchIterator::new(
+    //         InexactMergingIterator::new(
+    //             shard.docs(),
+    //             ranges
+    //                 .into_iter()
+    //                 .map(|it| SuffixSortingIterator::new(shard, it))
+    //                 .collect(),
+    //         ),
+    //         re,
+    //     ))
     } else {
         Box::new(CheckingDocMatchIterator::new(
-            InexactMergingIterator::new(
+            DocBitmapAllIterator::new(
                 shard.docs(),
                 ranges
                     .into_iter()
-                    .map(|it| SuffixSortingIterator::new(shard, it))
+                    .map(|it| it.map(|pr| shard.sa_slice(pr)).flatten().cloned())
                     .collect(),
             ),
             re,

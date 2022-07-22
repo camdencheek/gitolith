@@ -1,19 +1,20 @@
+use super::suffix::SuffixIdx;
 use std::ops::{Index, Range, RangeFrom, RangeTo};
 
 pub type DocID = u32;
 
 /// Doc is a view of a document in the index
 #[derive(Copy, Clone)]
-pub struct Doc<'a> {
+pub struct Doc<'s> {
     /// The index ID of the document. This is only guaranteed
     /// to be unique within the shard
     pub id: DocID,
 
     content_offset: u32,
-    pub content: &'a [u8],
+    pub content: &'s [u8],
 }
 
-impl<'a> Doc<'a> {
+impl<'s> Doc<'s> {
     pub fn start(&self) -> u32 {
         self.content_offset
     }
@@ -24,15 +25,15 @@ impl<'a> Doc<'a> {
 }
 
 #[derive(Copy, Clone)]
-pub struct Docs<'a> {
+pub struct DocSlice<'s> {
     start_id: DocID,
-    start_offsets: &'a [u32],
-    content: &'a [u8],
+    start_offsets: &'s [u32],
+    content: &'s [u8],
 }
 
-impl<'a> Docs<'a> {
-    pub fn new(start_id: DocID, start_offsets: &'a [u32], content: &'a [u8]) -> Docs<'a> {
-        Docs {
+impl<'s> DocSlice<'s> {
+    pub fn new(start_id: DocID, start_offsets: &'s [u32], content: &'s [u8]) -> DocSlice<'s> {
+        DocSlice {
             start_id,
             start_offsets,
             content,
@@ -45,12 +46,12 @@ impl<'a> Docs<'a> {
 
     pub fn index<I>(&self, idx: I) -> I::Output
     where
-        I: DocsIndex<'a>,
+        I: DocsIndex<'s>,
     {
         idx.index(self)
     }
 
-    pub fn pop_front(&mut self) -> Option<Doc<'a>> {
+    pub fn pop_front(&mut self) -> Option<Doc<'s>> {
         if self.len() == 0 {
             None
         } else {
@@ -60,42 +61,62 @@ impl<'a> Docs<'a> {
         }
     }
 
+    pub fn peek(&self) -> Option<Doc<'s>> {
+        if self.len() == 0 {
+            None
+        } else {
+            Some(self.index(0))
+        }
+    }
+
     fn content_start(&self) -> u32 {
         self.start_offsets[0]
     }
-}
 
-impl<'a> IntoIterator for Docs<'a> {
-    type Item = Doc<'a>;
-    type IntoIter = DocsIterator<'a>;
+    pub fn find_by_suffix(&self, suffix: SuffixIdx) -> Option<Doc<'s>> {
+        // Check that the suffix is in bounds for this doc slice.
+        if self.len() == 0 {
+            return None;
+        } else if *self.start_offsets.first()? > suffix {
+            return None;
+        } else if *self.start_offsets.last()? < suffix {
+            return None;
+        }
 
-    fn into_iter(self) -> DocsIterator<'a> {
-        DocsIterator { docs: self }
+        let (mut low, mut high) = (0u32, self.len());
+        while low <= high {
+            let mid = (high - low) / 2 + low;
+            let doc = self.index(mid);
+            if doc.start() > suffix {
+                high = mid - 1;
+            } else if doc.end() < suffix {
+                low = mid + 1
+            } else {
+                return Some(doc);
+            }
+        }
+        None
     }
 }
 
-pub struct DocsIterator<'a> {
-    docs: Docs<'a>,
-}
-
-impl<'a> Iterator for DocsIterator<'a> {
-    type Item = Doc<'a>;
+impl<'s> Iterator for DocSlice<'s> {
+    type Item = Doc<'s>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.docs.pop_front()
+        self.pop_front()
     }
 }
 
 pub trait DocsIndex<'a> {
     type Output;
 
-    fn index(&self, docs: &Docs<'a>) -> Self::Output;
+    fn index(&self, docs: &DocSlice<'a>) -> Self::Output;
 }
 
 impl<'a> DocsIndex<'a> for Range<u32> {
-    type Output = Docs<'a>;
+    type Output = DocSlice<'a>;
 
-    fn index(&self, docs: &Docs<'a>) -> Docs<'a> {
+    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
         let content_start = match docs.start_offsets.get(self.start as usize) {
             Some(off) => *off as usize - docs.start_offsets[0] as usize,
             None => docs.content.len(),
@@ -105,7 +126,7 @@ impl<'a> DocsIndex<'a> for Range<u32> {
             None => docs.content.len(),
         };
 
-        Docs {
+        DocSlice {
             start_id: docs.start_id + self.start,
             start_offsets: &docs.start_offsets[self.start as usize..self.end as usize],
             content: &docs.content[content_start..content_end],
@@ -114,17 +135,17 @@ impl<'a> DocsIndex<'a> for Range<u32> {
 }
 
 impl<'a> DocsIndex<'a> for RangeFrom<u32> {
-    type Output = Docs<'a>;
+    type Output = DocSlice<'a>;
 
-    fn index(&self, docs: &Docs<'a>) -> Docs<'a> {
+    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
         docs.index(self.start..docs.len())
     }
 }
 
 impl<'a> DocsIndex<'a> for RangeTo<u32> {
-    type Output = Docs<'a>;
+    type Output = DocSlice<'a>;
 
-    fn index(&self, docs: &Docs<'a>) -> Docs<'a> {
+    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
         docs.index(0..self.end)
     }
 }
@@ -132,7 +153,7 @@ impl<'a> DocsIndex<'a> for RangeTo<u32> {
 impl<'a> DocsIndex<'a> for u32 {
     type Output = Doc<'a>;
 
-    fn index(&self, docs: &Docs<'a>) -> Doc<'a> {
+    fn index(&self, docs: &DocSlice<'a>) -> Doc<'a> {
         let content_start =
             docs.start_offsets[*self as usize] as usize - docs.content_start() as usize;
         let content_end = match docs.start_offsets.get(*self as usize + 1) {

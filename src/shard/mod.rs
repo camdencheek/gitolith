@@ -14,7 +14,7 @@ use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 mod docs;
-use docs::{Doc, Docs};
+use docs::{Doc, DocSlice};
 
 pub type ShardID = u32;
 pub type SuffixID = u32;
@@ -160,8 +160,8 @@ impl Shard {
         &self.content()[idx as usize..]
     }
 
-    pub fn docs(&self) -> Docs<'_> {
-        Docs::new(0, self.doc_starts(), self.content())
+    pub fn docs(&self) -> DocSlice<'_> {
+        DocSlice::new(0, self.doc_starts(), self.content())
     }
 
     // returns a slice of all prefixes that start with the literal needle
@@ -169,13 +169,21 @@ impl Shard {
         &self.sa()[self.sa_find_start(needle) as usize..self.sa_find_end(needle) as usize]
     }
 
-    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> &[SuffixIdx]
+    pub fn sa_slice<T>(&self, r: RangeInclusive<T>) -> &[SuffixIdx]
     where
         T: AsRef<[u8]> + Ord,
     {
         debug_assert!(r.start() <= r.end());
         &self.sa()[self.sa_find_start(r.start().as_ref()) as usize
             ..self.sa_find_end(r.end().as_ref()) as usize]
+    }
+
+    pub fn sa_range<T>(&self, r: RangeInclusive<T>) -> Range<SuffixIdx>
+    where
+        T: AsRef<[u8]> + Ord,
+    {
+        debug_assert!(r.start() <= r.end());
+        self.sa_find_start(r.start().as_ref())..self.sa_find_end(r.end().as_ref())
     }
 
     // finds the index of the first suffix whose prefix is greater than or equal to needle
@@ -207,7 +215,7 @@ impl Shard {
         // TODO would be nice if this returned deterministic results.
         // TODO would be nice if this iterated over results rather than collected them.
         // TODO make this respect a limit.
-        fn search_docs<'a>(re: &Regex, docs: Docs<'a>) -> Vec<DocMatches<'a>> {
+        fn search_docs<'a>(re: &Regex, docs: DocSlice<'a>) -> Vec<DocMatches<'a>> {
             if docs.len() > 1 {
                 let partition = docs.len() / 2;
                 let (mut a, mut b) = rayon::join(
