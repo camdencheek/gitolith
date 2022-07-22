@@ -89,10 +89,13 @@ where
         let child = &mut self.suffix_iters[child_num];
         for suffix in child {
             if let Some(doc) = self.docs.find_by_suffix(suffix) {
+                // TODO this is probably unnecessary for the current doc,
+                // but it's easier to reason about.
+                self.doc_bitmaps[child_num].insert(doc.id);
+
                 if doc.id == target_doc {
                     return true;
                 }
-                self.doc_bitmaps[child_num].insert(doc.id);
             }
         }
         false
@@ -311,9 +314,7 @@ impl RegexRangesBuilder {
     // build finalizes the builder and returns a set of prefix
     // ranges and whether the prefixes
     fn build(mut self) -> (Vec<PrefixRangeIter>, bool) {
-        if let Some(cur) = self.current {
-            self.complete.push(cur)
-        }
+        self.close_current();
         (self.complete, self.exact)
     }
 
@@ -337,15 +338,19 @@ impl RegexRangesBuilder {
         }
     }
 
-    // cannot_handle marks the current set of prefixes as complete
-    // and marks the document iterator as inexact.
-    fn cannot_handle(&mut self) {
+    fn close_current(&mut self) {
         if let Some(open) = self.current.take() {
             if let (_, Some(max)) = open.depth_hint() && max > 3 {
                 self.complete.push(open);
             }
             self.current = None;
         }
+    }
+
+    // cannot_handle marks the current set of prefixes as complete
+    // and marks the document iterator as inexact.
+    fn cannot_handle(&mut self) {
+        self.close_current();
         self.exact = false;
     }
 

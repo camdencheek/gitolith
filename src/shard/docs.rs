@@ -77,9 +77,9 @@ impl<'s> DocSlice<'s> {
         // Check that the suffix is in bounds for this doc slice.
         if self.len() == 0 {
             return None;
-        } else if *self.start_offsets.first()? > suffix {
+        } else if self.content_start() > suffix {
             return None;
-        } else if *self.start_offsets.last()? < suffix {
+        } else if (self.content_start() + self.content.len() as u32) < suffix {
             return None;
         }
 
