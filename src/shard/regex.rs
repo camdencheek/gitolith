@@ -104,6 +104,35 @@ where
             suffix_iterators: suffixes.into_iter().map(|it| it.peekable()).collect(),
         }
     }
+
+    fn advance_docs_to_contain(&mut self, offset: SuffixIdx) -> Option<Doc<'a>> {
+        loop {
+            let peeked = *self.docs.peek()?;
+            if peeked.end() >= offset {
+                return Some(peeked);
+            }
+            self.docs.next();
+        }
+    }
+
+    // Advances the children until the next yielded suffix is after the provided offset.
+    // Returns the min offset and max offset if all children can be advanced to this state,
+    // otherwise returns None.
+    fn advance_children_to(&mut self, offset: SuffixIdx) -> Option<(SuffixIdx, SuffixIdx)> {
+        let (mut min, mut max) = (u32::MAX, 0u32);
+        for child in self.suffix_iterators.iter_mut() {
+            loop {
+                let peeked = *child.peek()?;
+                if peeked >= offset {
+                    min = min.min(peeked);
+                    max = max.max(peeked);
+                    break;
+                }
+                child.next();
+            }
+        }
+        Some((min, max))
+    }
 }
 
 impl<'a, T> Iterator for InexactMergingIterator<'a, T>
@@ -113,32 +142,20 @@ where
     type Item = Doc<'a>;
 
     fn next(&mut self) -> Option<Doc<'a>> {
-        let next_doc = self.docs.peek()?;
-        // Advance each child so next() is not before the current doc.
-        let mut min_suffix: Option<u32> = None;
-        for child in self.suffix_iterators.iter_mut() {
-            while let Some(&next) = child.peek() {
-                if next < next_doc.start() {
-                    child.next();
-                } else {
-                    min_suffix = match min_suffix {
-                        Some(m) => Some(m.min(next)),
-                        None => Some(next),
-                    };
-                    break;
-                }
+        let mut next_doc = *self.docs.peek()?;
+        let (mut child_min, mut child_max) = self.advance_children_to(next_doc.start())?;
+        loop {
+            assert!(child_min >= next_doc.start());
+            if next_doc.end() >= child_max {
+                return Some(self.docs.next()?);
             }
-        }
-        // Return early if all the child iterators are exhausted
-        let min_suffix = min_suffix?;
-        assert!(min_suffix >= next_doc.start());
-
-        while let Some(next_doc) = self.docs.next() {
-            if next_doc.end() >= min_suffix {
-                return Some(next_doc);
+            next_doc = self.advance_docs_to_contain(child_max)?;
+            assert!(next_doc.end() >= child_max);
+            if next_doc.start() <= child_min {
+                return Some(self.docs.next()?);
             }
+            (child_min, child_max) = self.advance_children_to(next_doc.start())?;
         }
-
         None
     }
 }
@@ -156,7 +173,6 @@ pub fn new_regex_iter<'a, 'b: 'a>(
     let (ranges, exact) = RegexRangesBuilder::from_hir(hir);
 
     if ranges.len() == 0 {
-        assert!(exact);
         // The suffix array provides us no useful information, so just search all the docs.
         Box::new(CheckingDocMatchIterator::new(shard.docs().into_iter(), re))
     // TODO implement an exact iterator
@@ -236,7 +252,9 @@ impl RegexRangesBuilder {
     // and marks the document iterator as inexact.
     fn cannot_handle(&mut self) {
         if let Some(open) = self.current.take() {
-            self.complete.push(open);
+            if let (_, Some(max)) = open.depth_hint() && max > 3 {
+                self.complete.push(open);
+            }
             self.current = None;
         }
         self.exact = false;

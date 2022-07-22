@@ -2,20 +2,24 @@ use std::ops::{Index, Range, RangeFrom, RangeTo};
 
 pub type DocID = u32;
 
+/// Doc is a view of a document in the index
 #[derive(Copy, Clone)]
 pub struct Doc<'a> {
+    /// The index ID of the document. This is only guaranteed
+    /// to be unique within the shard
     pub id: DocID,
-    content_start: u32,
+
+    content_offset: u32,
     pub content: &'a [u8],
 }
 
 impl<'a> Doc<'a> {
     pub fn start(&self) -> u32 {
-        self.content_start
+        self.content_offset
     }
 
     pub fn end(&self) -> u32 {
-        self.content_start + self.content.len() as u32
+        self.content_offset + self.content.len() as u32
     }
 }
 
@@ -137,7 +141,7 @@ impl<'a> DocsIndex<'a> for u32 {
         };
         Doc {
             id: docs.start_id + *self,
-            content_start: docs.start_offsets[*self as usize],
+            content_offset: docs.start_offsets[*self as usize],
             content: &docs.content[content_start..content_end],
         }
     }

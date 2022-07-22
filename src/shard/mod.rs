@@ -5,7 +5,6 @@ pub use self::regex::*;
 use self::suffix::SuffixIdx;
 use ::regex::bytes::Regex;
 use ::suffix as suf;
-use crossbeam;
 use itertools::{Itertools, Product};
 use memmap::{Mmap, MmapMut};
 use rayon;
@@ -17,7 +16,6 @@ use std::iter::Iterator;
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::thread;
 mod docs;
 use docs::{Doc, DocID, Docs};
 
@@ -272,6 +270,7 @@ impl ShardHeader {
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_INCOMPLETE: u16 = 1 << 0;
 
+    // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
         buf.write(&self.version.to_le_bytes());
@@ -315,5 +314,137 @@ impl Default for ShardHeader {
             sa_ptr: 0,
             sa_len: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use ::regex::bytes::Regex;
+    use std::error::Error;
+    use std::io::Cursor;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn corpus(strs: Vec<&str>) -> impl Iterator<Item = Cursor<&str>> {
+        strs.into_iter().map(|s| Cursor::new(s))
+    }
+
+    fn do_search(s: &Shard, re: &str) -> String {
+        let re = Regex::new(re).unwrap();
+        let mut buf = String::new();
+        for m in s.search(&re) {
+            buf.push_str(&format!("DocID: {}\n", m.doc.id));
+            for range in m.matches {
+                buf.push_str(
+                    std::str::from_utf8(&m.doc.content[range.start as usize..range.end as usize])
+                        .unwrap(),
+                );
+                buf.push_str("\n");
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn simple() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "bc");
+        assert_eq!(
+            res,
+            "DocID: 0\n\
+            bc\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_sensitive() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "(?i:BC)");
+        assert_eq!(
+            res,
+            "DocID: 0\n\
+            bc\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cross_doc_boundaries() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "bc\0d");
+        assert_eq!(res, "",);
+        Ok(())
+    }
+
+    #[test]
+    fn simple_hole() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "a.c");
+        assert_eq!(
+            res,
+            "DocID: 0\n\
+            abc\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hole_cross_docs() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "a.*f");
+        assert_eq!(res, "",);
+        Ok(())
+    }
+
+    #[test]
+    fn hole_cross_docs_reverse() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, "f.*a");
+        assert_eq!(res, "",);
+        Ok(())
+    }
+
+    #[test]
+    fn classes() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def", "ghi"]))?;
+        let res = do_search(&s, r"\w+");
+        assert_eq!(
+            res,
+            "DocID: 0\n\
+            abc\n\
+            DocID: 1\n\
+            def\n\
+            DocID: 2\n\
+            ghi\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multi_match_docs() -> Result<(), Box<dyn Error>> {
+        let f = tempfile::NamedTempFile::new()?;
+        let s = Shard::new(0, f.path(), corpus(vec!["abc", "def"]))?;
+        let res = do_search(&s, r"\w");
+        assert_eq!(
+            res,
+            "DocID: 0\n\
+            a\n\
+            b\n\
+            c\n\
+            DocID: 1\n\
+            d\n\
+            e\n\
+            f\n",
+        );
+        Ok(())
     }
 }

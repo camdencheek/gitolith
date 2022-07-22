@@ -7,7 +7,7 @@ use shard::Shard;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ops::{Range, RangeInclusive};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -73,18 +73,23 @@ fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
 fn list(args: ListArgs) -> Result<(), Box<dyn Error>> {
     let s = Shard::open(0, &args.shard)?;
 
+    let handle = std::io::stdout().lock();
+    let mut buf = std::io::BufWriter::new(handle);
     for doc in s.docs() {
-        println!("DocID: {}", doc.id);
-        print!(
+        buf.write_fmt(format_args!("DocID: {}", doc.id))?;
+        buf.write_fmt(format_args!(
             "===============\n{}\n==============\n",
-            std::str::from_utf8(doc.content).unwrap()
-        );
+            std::str::from_utf8(doc.content)?
+        ))?;
     }
     Ok(())
 }
 
 fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn Error>> {
     let re = Regex::new(query)?;
+
+    let handle = std::io::stdout().lock();
+    let mut buf = std::io::BufWriter::new(handle);
 
     if skip_index {
         let matches = s.search_skip_index(re);
@@ -100,13 +105,10 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
     } else {
         let matches = s.search(&re);
         for m in matches {
-            println!("DocID: {}", m.doc.id);
+            buf.write_fmt(format_args!("DocID: {}\n", m.doc.id))?;
             for range in m.matches {
-                println!(
-                    "{}",
-                    std::str::from_utf8(&m.doc.content[range.start as usize..range.end as usize])
-                        .unwrap()
-                );
+                buf.write(&m.doc.content[range.start as usize..range.end as usize])?;
+                buf.write(b"\n")?;
             }
         }
     }
