@@ -1,3 +1,4 @@
+#![feature(core_intrinsics)]
 pub mod shard;
 use crate::shard::Shard;
 use clap::{Parser, Subcommand};

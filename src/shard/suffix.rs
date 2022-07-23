@@ -32,13 +32,13 @@ impl<'s> SuffixArray<'s> {
 
     // finds the index of the first suffix whose prefix is greater than or equal to needle
     pub fn find_start(&self, needle: &[u8]) -> SuffixIdx {
-        if needle.len() == 0 {
+        if std::intrinsics::unlikely(needle.len() == 0) {
             return 0;
         }
         let (scope_start, scope) = self.scoped_array(needle[0]);
         scope_start
-            + scope.partition_point(|idx| {
-                let suf_start = *idx as usize;
+            + scope.partition_point(|&suf_start| {
+                let suf_start = suf_start as usize;
                 let suf_end = usize::min(suf_start + needle.len(), self.content.len());
                 let suf = &self.content[suf_start..suf_end];
                 suf < needle
@@ -47,14 +47,14 @@ impl<'s> SuffixArray<'s> {
 
     // finds the index of the first suffix whose prefix is greater than needle
     pub fn find_end(&self, needle: &[u8]) -> SuffixIdx {
-        if needle.len() == 0 {
+        if std::intrinsics::unlikely(needle.len() == 0) {
             return self.array.len() as SuffixIdx;
         }
 
         let (scope_start, scope) = self.scoped_array(needle[0]);
         scope_start
-            + scope.partition_point(|&idx| {
-                let suf_start = idx as usize;
+            + scope.partition_point(|&suf_start| {
+                let suf_start = suf_start as usize;
                 let suf_end = usize::min(suf_start + needle.len(), self.content.len());
                 let suf = &self.content[suf_start..suf_end];
                 suf <= needle
@@ -63,7 +63,7 @@ impl<'s> SuffixArray<'s> {
 
     pub fn scoped_array(&self, scope: u8) -> (u32, &'_ [ContentIdx]) {
         let start = self.char_offsets[scope as usize] as usize;
-        let end = if scope < u8::MAX {
+        let end = if std::intrinsics::likely(scope < u8::MAX) {
             self.char_offsets[scope as usize + 1] as usize
         } else {
             self.array.len()
