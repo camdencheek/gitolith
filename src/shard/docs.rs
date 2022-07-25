@@ -1,174 +1,170 @@
-use super::suffix::SuffixIdx;
-use std::ops::{Index, Range, RangeFrom, RangeTo};
+use super::ShardHeader;
+use derive_more::{Add, From, Into, Sub};
+use std::fs::File;
+use std::io;
+use std::ops::Range;
+use std::os::unix::fs::FileExt;
+use std::rc::Rc;
+use sucds::elias_fano::EliasFano;
 
-pub type DocID = u32;
+#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug)]
+pub struct DocID(u32);
 
-/// Doc is a view of a document in the index
-#[derive(Copy, Clone)]
-pub struct Doc<'s> {
-    /// The index ID of the document. This is only guaranteed
-    /// to be unique within the shard
-    pub id: DocID,
+#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug)]
+pub struct ContentIdx(u32);
 
-    content_offset: u32,
-    pub content: &'s [u8],
+pub struct DocStore {
+    file: Rc<File>,
+    doc_ends_ptr: u64,
+    doc_ends_len: usize,
 }
 
-impl<'s> Doc<'s> {
-    pub fn start(&self) -> u32 {
-        self.content_offset
-    }
-
-    pub fn end(&self) -> u32 {
-        self.content_offset + self.content.len() as u32
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct DocSlice<'s> {
-    start_id: DocID,
-    start_offsets: &'s [u32],
-    content: &'s [u8],
-}
-
-impl<'s> DocSlice<'s> {
-    pub fn new(start_id: DocID, start_offsets: &'s [u32], content: &'s [u8]) -> DocSlice<'s> {
-        DocSlice {
-            start_id,
-            start_offsets,
-            content,
+impl DocStore {
+    pub fn new(doc_ends_ptr: u64, doc_ends_len: usize, file: Rc<File>) -> Self {
+        Self {
+            file,
+            doc_ends_ptr,
+            doc_ends_len,
         }
     }
 
-    pub fn len(&self) -> u32 {
-        self.start_offsets.len() as u32
+    // Returns the list of offsets (relative to the beginning of the content block)
+    // that contain the zero-byte separators at the end of each document.
+    fn end_ptrs(&self) -> Result<DocEnds, io::Error> {
+        let doc_ends = vec![ContentIdx(0u32); self.doc_ends_len as usize];
+        let mut doc_ends_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                doc_ends.as_ptr() as *mut u8,
+                doc_ends.len() * std::mem::size_of::<u32>(),
+            )
+        };
+        (*self.file).read_exact_at(&mut doc_ends_bytes, self.doc_ends_ptr)?;
+        Ok(DocEnds(doc_ends))
+    }
+}
+
+pub struct DocEnds(Vec<ContentIdx>);
+
+impl DocEnds {
+    pub fn new(v: Vec<ContentIdx>) -> Self {
+        Self(v)
     }
 
-    pub fn index<I>(&self, idx: I) -> I::Output
-    where
-        I: DocsIndex<'s>,
-    {
-        idx.index(self)
+    // Returns the id of the document that contains the given content offset.
+    pub fn container(&self, offset: ContentIdx) -> DocID {
+        let id = self.0.partition_point(|end| offset > *end);
+        DocID(id as u32)
     }
 
-    pub fn pop_front(&mut self) -> Option<Doc<'s>> {
-        if self.len() == 0 {
-            None
+    // Returns the range (relative to the beginning of the content block) that
+    // represents the content of the document with the given id.
+    pub fn content_range(&self, id: DocID) -> Range<ContentIdx> {
+        if id == DocID(0) {
+            ContentIdx(0)..self.0[0]
         } else {
-            let elem = self.index(0);
-            *self = self.index(1..);
-            Some(elem)
+            self.0[u32::from(id) as usize - 1] + ContentIdx(1)..self.0[u32::from(id) as usize]
         }
     }
 
-    pub fn peek(&self) -> Option<Doc<'s>> {
-        if self.len() == 0 {
-            None
+    pub fn compress(&self) -> CompressedDocEnds {
+        CompressedDocEnds(
+            EliasFano::from_ints(
+                &self
+                    .0
+                    .iter()
+                    .map(|&idx| idx.0 as usize)
+                    .collect::<Vec<usize>>(),
+            )
+            .unwrap()
+            .enable_rank(),
+        )
+    }
+}
+
+pub struct CompressedDocEnds(EliasFano);
+
+impl CompressedDocEnds {
+    pub fn new(e: EliasFano) -> Self {
+        Self(e)
+    }
+
+    // Returns the id of the document that contains the given content offset.
+    pub fn container(&self, offset: ContentIdx) -> DocID {
+        DocID(self.0.rank(u32::from(offset) as usize) as u32)
+    }
+
+    // Returns the range (relative to the beginning of the content block) that
+    // represents the content of the document with the given id.
+    pub fn content_range(&self, id: DocID) -> Range<ContentIdx> {
+        let start = if id == DocID(0) {
+            ContentIdx(0)
         } else {
-            Some(self.index(0))
-        }
-    }
-
-    fn content_start(&self) -> u32 {
-        self.start_offsets[0]
-    }
-
-    pub fn find_by_suffix(&self, suffix: SuffixIdx) -> Option<Doc<'s>> {
-        // Check that the suffix is in bounds for this doc slice.
-        if self.len() == 0 {
-            return None;
-        } else if self.content_start() > suffix {
-            return None;
-        } else if (self.content_start() + self.content.len() as u32) < suffix {
-            return None;
-        }
-
-        let (mut low, mut high) = (0u32, self.len());
-        while low <= high {
-            let mid = (high - low) / 2 + low;
-            let doc = self.index(mid);
-            if doc.start() > suffix {
-                high = mid - 1;
-            } else if doc.end() < suffix {
-                low = mid + 1
-            } else {
-                return Some(doc);
-            }
-        }
-        None
-    }
-}
-
-impl<'s> Iterator for DocSlice<'s> {
-    type Item = Doc<'s>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pop_front()
-    }
-}
-
-pub trait DocsIndex<'a> {
-    type Output;
-
-    fn index(&self, docs: &DocSlice<'a>) -> Self::Output;
-}
-
-impl<'a> DocsIndex<'a> for Range<u32> {
-    type Output = DocSlice<'a>;
-
-    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
-        let content_start = match docs.start_offsets.get(self.start as usize) {
-            Some(off) => *off as usize - docs.start_offsets[0] as usize,
-            None => docs.content.len(),
+            ContentIdx(self.0.select(u32::from(id) as usize - 1) as u32 + 1)
         };
-        let content_end = match docs.start_offsets.get(self.end as usize) {
-            Some(off) => *off as usize - docs.start_offsets[0] as usize,
-            None => docs.content.len(),
-        };
-
-        DocSlice {
-            start_id: docs.start_id + self.start,
-            start_offsets: &docs.start_offsets[self.start as usize..self.end as usize],
-            content: &docs.content[content_start..content_end],
-        }
-    }
-}
-
-impl<'a> DocsIndex<'a> for RangeFrom<u32> {
-    type Output = DocSlice<'a>;
-
-    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
-        docs.index(self.start..docs.len())
-    }
-}
-
-impl<'a> DocsIndex<'a> for RangeTo<u32> {
-    type Output = DocSlice<'a>;
-
-    fn index(&self, docs: &DocSlice<'a>) -> DocSlice<'a> {
-        docs.index(0..self.end)
-    }
-}
-
-impl<'a> DocsIndex<'a> for u32 {
-    type Output = Doc<'a>;
-
-    fn index(&self, docs: &DocSlice<'a>) -> Doc<'a> {
-        let content_start =
-            docs.start_offsets[*self as usize] as usize - docs.content_start() as usize;
-        let content_end = match docs.start_offsets.get(*self as usize + 1) {
-            Some(off) => *off as usize - 1 - docs.content_start() as usize,
-            None => docs.content.len() - 1,
-        };
-        Doc {
-            id: docs.start_id + *self,
-            content_offset: docs.start_offsets[*self as usize],
-            content: &docs.content[content_start..content_end],
-        }
+        let end = ContentIdx(self.0.select(u32::from(id) as usize) as u32);
+        start..end
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_doc_ends_container() {
+        let doc_ends = DocEnds::new(vec![
+            ContentIdx(1),
+            ContentIdx(5),
+            ContentIdx(10),
+            ContentIdx(11),
+            ContentIdx(12),
+            ContentIdx(20),
+            ContentIdx(100),
+        ]);
+        let compressed = doc_ends.compress();
+
+        let tests = vec![
+            (ContentIdx(0), DocID(0)),
+            (ContentIdx(1), DocID(0)),
+            (ContentIdx(2), DocID(1)),
+            (ContentIdx(11), DocID(3)),
+            (ContentIdx(12), DocID(4)),
+            (ContentIdx(99), DocID(6)),
+            (ContentIdx(100), DocID(6)),
+        ];
+
+        for (content_idx, doc_id) in tests {
+            assert_eq!(doc_ends.container(content_idx), doc_id);
+            assert_eq!(compressed.container(content_idx), doc_id);
+        }
+    }
+
+    #[test]
+    fn test_doc_ends_content_range() {
+        let doc_ends = DocEnds::new(vec![
+            ContentIdx(1),
+            ContentIdx(5),
+            ContentIdx(10),
+            ContentIdx(11),
+            ContentIdx(12),
+            ContentIdx(20),
+            ContentIdx(100),
+        ]);
+        let compressed = doc_ends.compress();
+
+        let tests = vec![
+            (DocID(0), ContentIdx(0)..ContentIdx(1)),
+            (DocID(1), ContentIdx(2)..ContentIdx(5)),
+            (DocID(2), ContentIdx(6)..ContentIdx(10)),
+            (DocID(3), ContentIdx(11)..ContentIdx(11)),
+            (DocID(4), ContentIdx(12)..ContentIdx(12)),
+            (DocID(5), ContentIdx(13)..ContentIdx(20)),
+            (DocID(6), ContentIdx(21)..ContentIdx(100)),
+        ];
+
+        for (doc_id, expected_range) in tests {
+            assert_eq!(doc_ends.content_range(doc_id), expected_range);
+            assert_eq!(compressed.content_range(doc_id), expected_range);
+        }
+    }
 }
