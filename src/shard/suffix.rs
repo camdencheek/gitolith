@@ -39,7 +39,7 @@ pub struct SuffixArrayStore {
 impl SuffixArrayStore {
     const BLOCK_SIZE: usize = 8192;
 
-    fn new(file: Rc<File>, sa_ptr: u64, sa_len: u32) -> Self {
+    pub fn new(file: Rc<File>, sa_ptr: u64, sa_len: u32) -> Self {
         assert!(sa_ptr % SuffixBlock::SIZE_BYTES as u64 == 0);
 
         Self {
@@ -50,11 +50,11 @@ impl SuffixArrayStore {
     }
 
     // Returns the block ID for the block that contains the given suffix
-    fn block_id_for_suffix(suffix: SuffixIdx) -> SuffixBlockID {
+    pub fn block_id_for_suffix(suffix: SuffixIdx) -> SuffixBlockID {
         SuffixBlockID(u32::from(suffix) / SuffixBlock::SIZE_SUFFIXES as u32)
     }
 
-    fn read_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, io::Error> {
+    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, io::Error> {
         let abs_start = self.sa_ptr + block_id.0 as u64 * SuffixBlock::SIZE_BYTES as u64;
         let mut block = SuffixBlock::new();
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
