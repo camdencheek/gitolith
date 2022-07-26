@@ -1,5 +1,6 @@
 mod builder;
 mod content;
+mod suffix;
 
 use std::fs::File;
 use std::os::unix::fs::FileExt;

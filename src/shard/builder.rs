@@ -48,7 +48,7 @@ impl ShardBuilder {
         self.file.write_all(&ZERO_BYTE[..])?;
 
         // Track the offsets of each document in the concatenated corpus
-        match &self.doc_ends[..] {
+        match self.doc_ends.as_slice() {
             [.., last] => self.doc_ends.push(last + doc_len as u32 + 1),
             [] => self.doc_ends.push(doc_len as u32 + 1),
         };
