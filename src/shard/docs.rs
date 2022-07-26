@@ -1,4 +1,4 @@
-use super::ShardHeader;
+use super::content::{ContentIdx, ContentStore};
 use derive_more::{Add, From, Into, Sub};
 use std::fs::File;
 use std::io;
@@ -7,22 +7,26 @@ use std::os::unix::fs::FileExt;
 use std::rc::Rc;
 use sucds::elias_fano::EliasFano;
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug)]
+#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct DocID(u32);
-
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug)]
-pub struct ContentIdx(u32);
 
 pub struct DocStore {
     file: Rc<File>,
+    content: ContentStore,
     doc_ends_ptr: u64,
     doc_ends_len: usize,
 }
 
 impl DocStore {
-    pub fn new(doc_ends_ptr: u64, doc_ends_len: usize, file: Rc<File>) -> Self {
+    pub fn new(
+        doc_ends_ptr: u64,
+        doc_ends_len: usize,
+        file: Rc<File>,
+        content: ContentStore,
+    ) -> Self {
         Self {
             file,
+            content,
             doc_ends_ptr,
             doc_ends_len,
         }
@@ -41,6 +45,10 @@ impl DocStore {
         (*self.file).read_exact_at(&mut doc_ends_bytes, self.doc_ends_ptr)?;
         Ok(DocEnds(doc_ends))
     }
+}
+
+pub struct CachedDocStore {
+    doc_store: DocStore,
 }
 
 pub struct DocEnds(Vec<ContentIdx>);

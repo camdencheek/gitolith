@@ -1,3 +1,4 @@
+use super::content::{ContentIdx, ContentStore};
 use super::docs::DocStore;
 use super::{Shard, ShardHeader};
 use memmap2::{Mmap, MmapMut};
@@ -43,8 +44,8 @@ impl ShardBuilder {
 
         // Pad each file with a zero byte so each offset in the corpus
         // is unambiguously associated with a single document.
-        const zero_byte: [u8; 1] = [0; 1];
-        self.file.write_all(&zero_byte[..])?;
+        const ZERO_BYTE: [u8; 1] = [0; 1];
+        self.file.write_all(&ZERO_BYTE[..])?;
 
         // Track the offsets of each document in the concatenated corpus
         match &self.doc_ends[..] {
@@ -58,12 +59,19 @@ impl ShardBuilder {
         self.write_doc_ends()?;
         self.write_suffix_array()?;
         let header = self.write_header()?;
+
+        let file = Rc::new(self.file);
+        let content = ContentStore::new(
+            Rc::clone(&file),
+            ShardHeader::HEADER_SIZE as u64,
+            *self.doc_ends.last().unwrap_or(&0) as u32 + 1,
+        );
+
         let doc_ends_ptr = header.doc_ends_ptr;
         let doc_ends_len = header.doc_ends_ptr as usize;
-        Ok(Shard {
-            header,
-            docs: DocStore::new(doc_ends_ptr, doc_ends_len, Rc::new(self.file)),
-        })
+        let docs = DocStore::new(doc_ends_ptr, doc_ends_len, Rc::clone(&file), content);
+
+        Ok(Shard { header, docs })
     }
 
     fn write_doc_ends(&mut self) -> Result<(), io::Error> {

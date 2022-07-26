@@ -1,14 +1,19 @@
 mod builder;
+mod content;
 
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 pub mod docs;
+use super::cache::{Cache, CacheKey, CacheValue};
+use content::ContentStore;
+use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
 use std::io::Write;
 use std::rc::Rc;
 
-pub struct ShardID(u32);
+#[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash)]
+pub struct ShardID(u16);
 
 pub struct Shard {
     pub header: ShardHeader,
@@ -28,11 +33,23 @@ impl Shard {
         let doc_ends_ptr = header.doc_ends_ptr;
         let doc_ends_len = header.doc_ends_len as usize;
 
+        let file = Rc::new(file);
+        let content = ContentStore::new(
+            Rc::clone(&file),
+            header.content_ptr,
+            header.content_len as u32,
+        );
+
         Ok(Self {
             header,
-            docs: DocStore::new(doc_ends_ptr, doc_ends_len, Rc::new(file)),
+            docs: DocStore::new(doc_ends_ptr, doc_ends_len, Rc::clone(&file), content),
         })
     }
+}
+
+pub struct CachedShard {
+    shard: Shard,
+    cache: Cache,
 }
 
 #[repr(C)]

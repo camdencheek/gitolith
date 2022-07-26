@@ -1,15 +1,12 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
 #![feature(core_intrinsics)]
 #![feature(const_char_convert)]
 mod cache;
 mod shard;
-use crate::shard::Shard;
 use clap::{Parser, Subcommand};
-use regex::bytes::Regex;
 use std::error::Error;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 pub struct Cli {
