@@ -1,5 +1,3 @@
-use super::content::{ContentIdx, ContentStore};
-use super::docs::DocStore;
 use super::suffix::{SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
 use memmap2::{Mmap, MmapMut};
@@ -8,7 +6,6 @@ use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::rc::Rc;
 use suffix;
 
 pub struct ShardBuilder {
@@ -99,7 +96,7 @@ impl ShardBuilder {
 
         self.file.set_len(sa_end)?;
 
-        let mmap = unsafe { Mmap::map(&self.file)? };
+        let mmap = unsafe { MmapMut::map_mut(&self.file)? };
         let content = &mmap[content_range.start as usize..content_range.end as usize];
         let sa = unsafe {
             std::slice::from_raw_parts_mut(
