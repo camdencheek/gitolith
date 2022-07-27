@@ -1,9 +1,11 @@
 use super::content::{ContentIdx, ContentStore};
 use super::docs::DocStore;
+use super::suffix::{SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
 use memmap2::{Mmap, MmapMut};
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -55,87 +57,96 @@ impl ShardBuilder {
         Ok(self.doc_ends.len() as u32 - 1)
     }
 
-    pub fn build(mut self) -> Result<Shard, io::Error> {
-        self.write_doc_ends()?;
-        self.write_suffix_array()?;
-        let header = self.write_header()?;
+    pub fn build(mut self) -> Result<Shard, Box<dyn std::error::Error>> {
+        let header_range = 0..ShardHeader::HEADER_SIZE as u64;
+        let content_range =
+            header_range.end..header_range.end + *self.doc_ends.last().unwrap_or(&0) as u64;
+        let doc_ends_range = self.write_doc_ends()?;
+        let suffix_array_range = self.write_suffix_array(content_range.clone())?;
+        let trigram_pointers_range = self.write_trigram_pointers(content_range.clone())?;
 
-        let file = Rc::new(self.file);
-        let content = ContentStore::new(
-            Rc::clone(&file),
-            ShardHeader::HEADER_SIZE as u64,
-            *self.doc_ends.last().unwrap_or(&0) as u32 + 1,
-        );
+        let header = self.write_header(
+            content_range,
+            doc_ends_range,
+            suffix_array_range,
+            trigram_pointers_range,
+        )?;
 
-        let doc_ends_ptr = header.doc_ends_ptr;
-        let doc_ends_len = header.doc_ends_ptr as usize;
-        let docs = DocStore::new(doc_ends_ptr, doc_ends_len, Rc::clone(&file), content);
-
-        Ok(Shard { header, docs })
+        Ok(Shard::from_file(self.file)?)
     }
 
-    fn write_doc_ends(&mut self) -> Result<(), io::Error> {
+    // Writes the collected doc ends to the file, returning the byte range in the file that
+    // contains the doc ends.
+    fn write_doc_ends(&mut self) -> Result<Range<u64>, io::Error> {
         // Write all the doc ends to the buffer
+        let start = self.file.seek(io::SeekFrom::Current(0))?;
         let mut buf = BufWriter::new(&self.file);
         for doc_end in self.doc_ends.iter() {
-            buf.write(&doc_end.to_le_bytes())?;
+            buf.write_all(&doc_end.to_le_bytes())?;
         }
         buf.flush()?;
-        Ok(())
+        Ok(start..(self.doc_ends.len() * std::mem::size_of::<u32>()) as u64)
     }
 
-    fn write_suffix_array(&mut self) -> Result<(), io::Error> {
-        let data_mmap = unsafe { Mmap::map(&self.file)? };
+    fn write_suffix_array(&mut self, content_range: Range<u64>) -> Result<Range<u64>, io::Error> {
+        let current_position = self.file.seek(io::SeekFrom::Current(0))?;
 
-        // TODO all these offsets should be defined in one place
-        let content_start = ShardHeader::HEADER_SIZE;
-        let content_end = content_start + *self.doc_ends.last().unwrap_or(&0) as usize;
-        let content = &data_mmap[content_start..content_end];
+        // Round up to the nearest block size so we have aligned blocks for our suffix array
+        let sa_start = current_position
+            + (SuffixBlock::SIZE_BYTES as u64 - current_position % SuffixBlock::SIZE_BYTES as u64);
+        let sa_end = sa_start
+            + (content_range.end - content_range.start) * std::mem::size_of::<u32>() as u64;
 
-        let index_mmap = MmapMut::map_anon(content.len() * std::mem::size_of::<u32>())?;
+        self.file.set_len(sa_end)?;
+
+        let mmap = unsafe { Mmap::map(&self.file)? };
+        let content = &mmap[content_range.start as usize..content_range.end as usize];
         let sa = unsafe {
-            std::slice::from_raw_parts_mut(index_mmap[..].as_ptr() as *mut u32, content.len())
+            std::slice::from_raw_parts_mut(
+                mmap[sa_start as usize..].as_ptr() as *mut u32,
+                content.len(),
+            )
         };
 
         let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
         let mut bins = suffix::Bins::new();
         suffix::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content));
-
-        let mut buf = BufWriter::new(&self.file);
-        for suffix in sa.into_iter() {
-            buf.write(&suffix.to_le_bytes())?;
-        }
-
-        let find_char_offset =
-            |char: u8| -> u32 { sa.partition_point(|idx| content[*idx as usize] < char) as u32 };
-
-        for c in u8::MIN..=u8::MAX {
-            buf.write(&find_char_offset(c).to_le_bytes())?;
-        }
-        buf.flush()?;
-        Ok(())
+        Ok(sa_start..sa_end)
     }
 
-    fn write_header(&self) -> Result<ShardHeader, io::Error> {
-        let content_ptr = ShardHeader::HEADER_SIZE as u64;
-        let content_len = *self.doc_ends.last().unwrap_or(&0) as u64 + 1;
-        let doc_ends_ptr = content_ptr + content_len;
-        let doc_ends_len = self.doc_ends.len() as u64;
-        let sa_ptr = doc_ends_ptr + doc_ends_len * std::mem::size_of::<u32>() as u64;
-        let sa_len = content_len;
-        let offsets_ptr = sa_ptr + sa_len * std::mem::size_of::<u32>() as u64;
+    fn write_trigram_pointers(
+        &mut self,
+        content_range: Range<u64>,
+    ) -> Result<Range<u64>, Box<dyn std::error::Error>> {
+        let mmap = unsafe { Mmap::map(&self.file)? };
+        let content = &mmap[content_range.start as usize..content_range.end as usize];
+        let pointers = TrigramPointers::from_content(content);
+        let compressed_pointers = pointers.compress();
+        let pointers_start = self.file.seek(SeekFrom::Current(0))?;
+        let pointers_len = compressed_pointers.serialize_into(&self.file)?;
+        Ok(pointers_start..pointers_start + pointers_len as u64)
+    }
 
+    fn write_header(
+        &self,
+        content_range: Range<u64>,
+        doc_ends_range: Range<u64>,
+        suffixes_range: Range<u64>,
+        trigram_pointers_range: Range<u64>,
+    ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
             _padding: 0,
-            content_ptr,
-            content_len,
-            doc_ends_ptr,
-            doc_ends_len,
-            sa_ptr,
-            sa_len,
-            offsets_ptr,
+            content_ptr: content_range.start,
+            content_len: content_range.end - content_range.start,
+            doc_ends_ptr: doc_ends_range.start,
+            doc_ends_len: (doc_ends_range.end - doc_ends_range.start)
+                / std::mem::size_of::<u32>() as u64,
+            sa_ptr: suffixes_range.start,
+            sa_len: (suffixes_range.end - suffixes_range.start) / std::mem::size_of::<u32>() as u64,
+            trigram_pointers_ptr: trigram_pointers_range.start,
+            trigram_pointers_len: trigram_pointers_range.end - trigram_pointers_range.start,
         };
 
         self.file.write_at(&header.to_bytes(), 0)?;

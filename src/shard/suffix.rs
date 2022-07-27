@@ -5,7 +5,7 @@ use std::ops::{Range, RangeInclusive};
 use std::os::unix::prelude::FileExt;
 use std::rc::Rc;
 use sucds::elias_fano::EliasFano;
-use sucds::EliasFanoBuilder;
+use sucds::{EliasFanoBuilder, Searial};
 
 #[derive(Copy, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixIdx(pub u32);
@@ -16,8 +16,8 @@ pub struct SuffixBlockID(pub u32);
 pub struct SuffixBlock([u32; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
-    const SIZE_SUFFIXES: usize = 2048;
-    const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
+    pub const SIZE_SUFFIXES: usize = 2048;
+    pub const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
 
     fn new() -> Self {
         Self([0u32; Self::SIZE_SUFFIXES])
@@ -64,7 +64,7 @@ impl SuffixArrayStore {
 
 // A set of pointers into the suffix array to the end (exclusive) of the range
 // of suffixes that start with that trigram.
-struct TrigramPointers([SuffixIdx; Self::N_TRIGRAMS]);
+pub struct TrigramPointers([SuffixIdx; Self::N_TRIGRAMS]);
 
 impl TrigramPointers {
     // The number of unique trigrams given a 256-character alphabet (u8)
@@ -99,7 +99,7 @@ impl TrigramPointers {
     }
 }
 
-struct CompressedTrigramPointers(EliasFano);
+pub struct CompressedTrigramPointers(EliasFano);
 
 impl CompressedTrigramPointers {
     pub fn new(pointers: &[SuffixIdx; TrigramPointers::N_TRIGRAMS]) -> Self {
@@ -149,5 +149,12 @@ impl CompressedTrigramPointers {
             [] => self.0.len(),
         };
         SuffixIdx(self.0.select(idx) as u32)
+    }
+
+    pub fn serialize_into<W: std::io::Write>(
+        &self,
+        writer: W,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(self.0.serialize_into(writer)?)
     }
 }

@@ -32,9 +32,16 @@ impl DocStore {
         }
     }
 
+    pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Vec<u8>, io::Error> {
+        let range = doc_ends.content_range(doc_id);
+        let mut buf = Vec::with_capacity(u32::from(range.end - range.start) as usize);
+        (*self.file).read_exact_at(&mut buf, u64::from(range.start))?;
+        Ok(buf)
+    }
+
     // Returns the list of offsets (relative to the beginning of the content block)
     // that contain the zero-byte separators at the end of each document.
-    fn end_ptrs(&self) -> Result<DocEnds, io::Error> {
+    pub fn read_doc_ends(&self) -> Result<DocEnds, io::Error> {
         let doc_ends = vec![ContentIdx(0u32); self.doc_ends_len as usize];
         let mut doc_ends_bytes = unsafe {
             std::slice::from_raw_parts_mut(

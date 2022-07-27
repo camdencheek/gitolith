@@ -3,10 +3,11 @@ mod content;
 mod suffix;
 
 use std::fs::File;
+use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 pub mod docs;
-use super::cache::{Cache, CacheKey, CacheValue};
+use super::cache::Cache;
 use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
@@ -65,7 +66,8 @@ pub struct ShardHeader {
     pub doc_ends_len: u64,
     pub sa_ptr: u64,
     pub sa_len: u64,
-    pub offsets_ptr: u64,
+    pub trigram_pointers_ptr: u64,
+    pub trigram_pointers_len: u64,
 }
 
 impl ShardHeader {
@@ -88,7 +90,8 @@ impl ShardHeader {
         buf.write(&self.doc_ends_len.to_le_bytes()).unwrap();
         buf.write(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write(&self.sa_len.to_le_bytes()).unwrap();
-        buf.write(&self.offsets_ptr.to_le_bytes()).unwrap();
+        buf.write(&self.trigram_pointers_ptr.to_le_bytes()).unwrap();
+        buf.write(&self.trigram_pointers_len.to_le_bytes()).unwrap();
         buf
     }
 
@@ -103,7 +106,8 @@ impl ShardHeader {
             doc_ends_len: u64::from_le_bytes(buf[32..40].try_into()?),
             sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
             sa_len: u64::from_le_bytes(buf[48..56].try_into()?),
-            offsets_ptr: u64::from_le_bytes(buf[56..64].try_into()?),
+            trigram_pointers_ptr: u64::from_le_bytes(buf[56..64].try_into()?),
+            trigram_pointers_len: u64::from_le_bytes(buf[64..72].try_into()?),
         })
     }
 }
@@ -120,7 +124,8 @@ impl Default for ShardHeader {
             doc_ends_len: 0,
             sa_ptr: 0,
             sa_len: 0,
-            offsets_ptr: 0,
+            trigram_pointers_ptr: 0,
+            trigram_pointers_len: 0,
         }
     }
 }
