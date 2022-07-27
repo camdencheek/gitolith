@@ -1,13 +1,12 @@
-mod builder;
-mod content;
-mod suffix;
+pub mod builder;
+pub mod content;
+pub mod suffix;
 
 use std::fs::File;
-use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 pub mod docs;
-use super::cache::Cache;
+// use super::cache::Cache;
 use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
@@ -49,10 +48,10 @@ impl Shard {
     }
 }
 
-pub struct CachedShard {
-    shard: Shard,
-    cache: Cache,
-}
+// pub struct CachedShard {
+//     shard: Shard,
+//     cache: Cache,
+// }
 
 #[repr(C)]
 #[derive(Debug)]

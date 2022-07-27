@@ -8,6 +8,7 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use suffix;
 
+#[derive(Debug)]
 pub struct ShardBuilder {
     file: File,
     // the locations of the zero-bytes following each document,
@@ -60,9 +61,9 @@ impl ShardBuilder {
             header_range.end..header_range.end + *self.doc_ends.last().unwrap_or(&0) as u64;
         let doc_ends_range = self.write_doc_ends()?;
         let suffix_array_range = self.write_suffix_array(content_range.clone())?;
-        let trigram_pointers_range = self.write_trigram_pointers(content_range.clone())?;
+        let trigram_pointers_range = self.write_trigram_pointers(&content_range)?;
 
-        let header = self.write_header(
+        self.write_header(
             content_range,
             doc_ends_range,
             suffix_array_range,
@@ -113,14 +114,16 @@ impl ShardBuilder {
 
     fn write_trigram_pointers(
         &mut self,
-        content_range: Range<u64>,
+        content_range: &Range<u64>,
     ) -> Result<Range<u64>, Box<dyn std::error::Error>> {
         let mmap = unsafe { Mmap::map(&self.file)? };
         let content = &mmap[content_range.start as usize..content_range.end as usize];
         let pointers = TrigramPointers::from_content(content);
         let compressed_pointers = pointers.compress();
         let pointers_start = self.file.seek(SeekFrom::Current(0))?;
-        let pointers_len = compressed_pointers.serialize_into(&self.file)?;
+        let mut buf = BufWriter::new(&self.file);
+        let pointers_len = compressed_pointers.serialize_into(&mut buf)?;
+        buf.flush()?;
         Ok(pointers_start..pointers_start + pointers_len as u64)
     }
 

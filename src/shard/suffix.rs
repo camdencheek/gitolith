@@ -64,7 +64,7 @@ impl SuffixArrayStore {
 
 // A set of pointers into the suffix array to the end (exclusive) of the range
 // of suffixes that start with that trigram.
-pub struct TrigramPointers([SuffixIdx; Self::N_TRIGRAMS]);
+pub struct TrigramPointers(Box<[SuffixIdx; Self::N_TRIGRAMS]>);
 
 impl TrigramPointers {
     // The number of unique trigrams given a 256-character alphabet (u8)
@@ -73,14 +73,14 @@ impl TrigramPointers {
     pub fn from_content(content: &[u8]) -> Self {
         // Use SuffixIdx in the frequencies array so we can mutate in-place
         // to get the pointers without any unsafe.
-        let mut frequencies = [SuffixIdx(0); Self::N_TRIGRAMS];
+        let mut frequencies = Box::new([SuffixIdx(0); Self::N_TRIGRAMS]);
 
         for i in 0..content.len() {
             let suffix = &content[i..];
             let trigram_idx = match suffix {
-                [a, b, c, ..] => usize::from(*a) << 16 + usize::from(*b) << 8 + usize::from(*c),
-                [a, b] => usize::from(*a) << 16 + usize::from(*b) << 8,
-                [a] => usize::from(*a) << 16,
+                [a, b, c, ..] => (usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c),
+                [a, b] => (usize::from(*a) << 16) + (usize::from(*b) << 8),
+                [a] => (usize::from(*a) << 16),
                 _ => unreachable!("should not ever have an empty slice"),
             };
             frequencies[trigram_idx] += SuffixIdx(1)
