@@ -1,4 +1,5 @@
 use derive_more::{Add, From, Into, Sub};
+use memmap2::Mmap;
 use std::fs::File;
 use std::io;
 use std::ops::Range;
@@ -20,32 +21,44 @@ impl From<ContentIdx> for u64 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContentStore {
     file: Rc<File>,
-    content_ptr: u64,
-    content_len: u32,
+    file_ptr: u64,
+    len: u32,
 }
 
 impl ContentStore {
     pub fn new(file: Rc<File>, content_ptr: u64, content_len: u32) -> Self {
         Self {
             file,
-            content_ptr,
-            content_len,
+            file_ptr: content_ptr,
+            len: content_len,
         }
     }
 
     pub fn read(&self, range: Range<ContentIdx>) -> Result<Vec<u8>, io::Error> {
         // Calculate the absolute file offsets for the given range
-        let abs_start = u64::from(range.start) + self.content_ptr;
-        let abs_end = u64::from(range.end) + self.content_ptr;
+        let abs_start = u64::from(range.start) + self.file_ptr;
+        let abs_end = u64::from(range.end) + self.file_ptr;
 
-        debug_assert!(abs_start <= self.content_ptr + self.content_len as u64);
-        debug_assert!(abs_end <= self.content_ptr + self.content_len as u64);
+        debug_assert!(abs_start <= self.file_ptr + self.len as u64);
+        debug_assert!(abs_end <= self.file_ptr + self.len as u64);
 
         let mut buf = vec![0u8; (abs_end - abs_start) as usize];
         (*self.file).read_exact_at(&mut buf, abs_start)?;
         Ok(buf)
+    }
+
+    pub fn slice_from_mmap<'a>(&'_ self, mmap: &'a [u8]) -> &'a [u8] {
+        &mmap[self.file_ptr as usize..self.file_ptr as usize + self.len as usize]
+    }
+
+    pub fn file_ptr(&self) -> u64 {
+        self.file_ptr
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len
     }
 }

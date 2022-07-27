@@ -34,18 +34,28 @@ pub struct SuffixArrayStore {
     sa_ptr: u64,
     // Length in u32s, not bytes
     sa_len: u32,
+    trigrams_ptr: u64,
+    trigrams_len: u64,
 }
 
 impl SuffixArrayStore {
     const BLOCK_SIZE: usize = 8192;
 
-    pub fn new(file: Rc<File>, sa_ptr: u64, sa_len: u32) -> Self {
+    pub fn new(
+        file: Rc<File>,
+        sa_ptr: u64,
+        sa_len: u32,
+        trigrams_ptr: u64,
+        trigrams_len: u64,
+    ) -> Self {
         assert!(sa_ptr % SuffixBlock::SIZE_BYTES as u64 == 0);
 
         Self {
             file,
             sa_ptr,
             sa_len,
+            trigrams_ptr,
+            trigrams_len,
         }
     }
 
@@ -59,6 +69,22 @@ impl SuffixArrayStore {
         let mut block = SuffixBlock::new();
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
         Ok(block)
+    }
+
+    pub fn sa_file_ptr(&self) -> u64 {
+        self.sa_ptr
+    }
+
+    pub fn sa_len(&self) -> u32 {
+        self.sa_len
+    }
+
+    pub fn trigrams_file_ptr(&self) -> u64 {
+        self.trigrams_ptr
+    }
+
+    pub fn trigrams_len(&self) -> u64 {
+        self.trigrams_len
     }
 }
 

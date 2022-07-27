@@ -14,15 +14,15 @@ pub struct DocStore {
     file: Rc<File>,
     content: ContentStore,
     doc_ends_ptr: u64,
-    doc_ends_len: usize,
+    doc_ends_len: u32,
 }
 
 impl DocStore {
     pub fn new(
-        doc_ends_ptr: u64,
-        doc_ends_len: usize,
         file: Rc<File>,
         content: ContentStore,
+        doc_ends_ptr: u64,
+        doc_ends_len: u32,
     ) -> Self {
         Self {
             file,
@@ -51,6 +51,14 @@ impl DocStore {
         };
         (*self.file).read_exact_at(&mut doc_ends_bytes, self.doc_ends_ptr)?;
         Ok(DocEnds(doc_ends))
+    }
+
+    pub fn doc_ends_file_ptr(&self) -> u64 {
+        self.doc_ends_ptr
+    }
+
+    pub fn num_docs(&self) -> u32 {
+        self.doc_ends_len
     }
 }
 

@@ -7,6 +7,7 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 pub mod docs;
 // use super::cache::Cache;
+use super::shard::suffix::SuffixArrayStore;
 use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
@@ -19,6 +20,7 @@ pub struct ShardID(u16);
 pub struct Shard {
     pub header: ShardHeader,
     pub docs: DocStore,
+    pub suffixes: SuffixArrayStore,
 }
 
 impl Shard {
@@ -31,8 +33,6 @@ impl Shard {
         let mut buf = [0u8; ShardHeader::HEADER_SIZE];
         file.read_at(&mut buf[..], 0)?;
         let header = ShardHeader::from_bytes(&buf[..])?;
-        let doc_ends_ptr = header.doc_ends_ptr;
-        let doc_ends_len = header.doc_ends_len as usize;
 
         let file = Rc::new(file);
         let content = ContentStore::new(
@@ -40,10 +40,24 @@ impl Shard {
             header.content_ptr,
             header.content_len as u32,
         );
+        let docs = DocStore::new(
+            Rc::clone(&file),
+            content,
+            header.doc_ends_ptr,
+            header.doc_ends_len as u32,
+        );
+        let suffixes = SuffixArrayStore::new(
+            Rc::clone(&file),
+            header.sa_ptr,
+            header.sa_len as u32,
+            header.trigrams_ptr,
+            header.trigrams_len,
+        );
 
         Ok(Self {
             header,
-            docs: DocStore::new(doc_ends_ptr, doc_ends_len, Rc::clone(&file), content),
+            docs,
+            suffixes,
         })
     }
 }
@@ -65,8 +79,8 @@ pub struct ShardHeader {
     pub doc_ends_len: u64,
     pub sa_ptr: u64,
     pub sa_len: u64,
-    pub trigram_pointers_ptr: u64,
-    pub trigram_pointers_len: u64,
+    pub trigrams_ptr: u64,
+    pub trigrams_len: u64,
 }
 
 impl ShardHeader {
@@ -89,8 +103,8 @@ impl ShardHeader {
         buf.write(&self.doc_ends_len.to_le_bytes()).unwrap();
         buf.write(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write(&self.sa_len.to_le_bytes()).unwrap();
-        buf.write(&self.trigram_pointers_ptr.to_le_bytes()).unwrap();
-        buf.write(&self.trigram_pointers_len.to_le_bytes()).unwrap();
+        buf.write(&self.trigrams_ptr.to_le_bytes()).unwrap();
+        buf.write(&self.trigrams_len.to_le_bytes()).unwrap();
         buf
     }
 
@@ -105,8 +119,8 @@ impl ShardHeader {
             doc_ends_len: u64::from_le_bytes(buf[32..40].try_into()?),
             sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
             sa_len: u64::from_le_bytes(buf[48..56].try_into()?),
-            trigram_pointers_ptr: u64::from_le_bytes(buf[56..64].try_into()?),
-            trigram_pointers_len: u64::from_le_bytes(buf[64..72].try_into()?),
+            trigrams_ptr: u64::from_le_bytes(buf[56..64].try_into()?),
+            trigrams_len: u64::from_le_bytes(buf[64..72].try_into()?),
         })
     }
 }
@@ -123,8 +137,8 @@ impl Default for ShardHeader {
             doc_ends_len: 0,
             sa_ptr: 0,
             sa_len: 0,
-            trigram_pointers_ptr: 0,
-            trigram_pointers_len: 0,
+            trigrams_ptr: 0,
+            trigrams_len: 0,
         }
     }
 }

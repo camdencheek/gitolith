@@ -1,9 +1,8 @@
-use super::suffix::{SuffixBlock, TrigramPointers};
+use super::suffix::{SuffixArrayStore, SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
 use memmap2::{Mmap, MmapMut};
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
-use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use suffix;
@@ -56,100 +55,116 @@ impl ShardBuilder {
     }
 
     pub fn build(mut self) -> Result<Shard, Box<dyn std::error::Error>> {
-        let header_range = 0..ShardHeader::HEADER_SIZE as u64;
-        let content_range =
-            header_range.end..header_range.end + *self.doc_ends.last().unwrap_or(&0) as u64;
-        let doc_ends_range = self.write_doc_ends()?;
-        let suffix_array_range = self.write_suffix_array(content_range.clone())?;
-        let trigram_pointers_range = self.write_trigram_pointers(&content_range)?;
-
-        self.write_header(
-            content_range,
-            doc_ends_range,
-            suffix_array_range,
-            trigram_pointers_range,
+        let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
+        let (doc_starts_ptr, doc_starts_len) = Self::build_docs(&mut self.file, &self.doc_ends)?;
+        let (suffix_ptr, suffix_len, trigram_ptr, trigram_len) =
+            Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
+        Self::build_header(
+            &self.file,
+            content_ptr,
+            content_len.into(),
+            doc_starts_ptr,
+            doc_starts_len.into(),
+            suffix_ptr,
+            suffix_len.into(),
+            trigram_ptr,
+            trigram_len,
         )?;
-
         Ok(Shard::from_file(self.file)?)
     }
 
-    // Writes the collected doc ends to the file, returning the byte range in the file that
-    // contains the doc ends.
-    fn write_doc_ends(&mut self) -> Result<Range<u64>, io::Error> {
+    fn build_content(doc_ends: &Vec<u32>) -> (u64, u32) {
+        (
+            ShardHeader::HEADER_SIZE as u64,
+            *doc_ends.last().unwrap_or(&0),
+        )
+    }
+
+    fn build_docs(file: &mut File, doc_ends: &Vec<u32>) -> Result<(u64, u32), io::Error> {
         // Write all the doc ends to the buffer
-        let start = self.file.seek(io::SeekFrom::Current(0))?;
-        let mut buf = BufWriter::new(&self.file);
-        for doc_end in self.doc_ends.iter() {
+        let start = file.seek(io::SeekFrom::Current(0))?;
+        let mut buf = BufWriter::new(file);
+        for doc_end in doc_ends.iter() {
             buf.write_all(&doc_end.to_le_bytes())?;
         }
         buf.flush()?;
-        Ok(start..(self.doc_ends.len() * std::mem::size_of::<u32>()) as u64)
+        Ok((start, doc_ends.len() as u32))
     }
 
-    fn write_suffix_array(&mut self, content_range: Range<u64>) -> Result<Range<u64>, io::Error> {
-        let current_position = self.file.seek(io::SeekFrom::Current(0))?;
+    fn build_suffix_array(
+        file: &mut File,
+        content_ptr: u64,
+        content_len: u32,
+    ) -> Result<(u64, u32, u64, u64), Box<dyn std::error::Error>> {
+        let (pointers_start, pointers_len) = {
+            let mmap = unsafe { Mmap::map(&*file)? };
+            let content_data =
+                &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
 
-        // Round up to the nearest block size so we have aligned blocks for our suffix array
-        let sa_start = current_position
-            + (SuffixBlock::SIZE_BYTES as u64 - current_position % SuffixBlock::SIZE_BYTES as u64);
-        let sa_end = sa_start
-            + (content_range.end - content_range.start) * std::mem::size_of::<u32>() as u64;
-
-        self.file.set_len(sa_end)?;
-
-        let mmap = unsafe { MmapMut::map_mut(&self.file)? };
-        let content = &mmap[content_range.start as usize..content_range.end as usize];
-        let sa = unsafe {
-            std::slice::from_raw_parts_mut(
-                mmap[sa_start as usize..].as_ptr() as *mut u32,
-                content.len(),
-            )
+            let pointers = TrigramPointers::from_content(content_data).compress();
+            let pointers_start = file.seek(SeekFrom::Current(0))?;
+            let mut buf = Vec::new(); // TODO allocate this to the right capacity
+            let pointers_len = pointers.serialize_into(&mut buf)?;
+            file.write_all(&buf)?;
+            (pointers_start, pointers_len)
         };
 
-        let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
-        let mut bins = suffix::Bins::new();
-        suffix::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content));
-        Ok(sa_start..sa_end)
+        let sa_start = {
+            let current_position = file.seek(io::SeekFrom::Current(0))?;
+
+            // Round up to the nearest block size so we have aligned blocks for our suffix array
+            let sa_start = current_position.next_multiple_of(SuffixBlock::SIZE_BYTES as u64);
+            let sa_end = sa_start + content_len as u64 * std::mem::size_of::<u32>() as u64;
+
+            // Round file length to the next block size and move the cursor to the end of the file
+            file.set_len(sa_end.next_multiple_of(SuffixBlock::SIZE_BYTES as u64))?;
+            file.seek(io::SeekFrom::End(0))?;
+
+            // Reopen mmap after extending file
+            let mmap = unsafe { MmapMut::map_mut(&*file)? };
+            let content_data =
+                &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
+
+            let sa = unsafe {
+                std::slice::from_raw_parts_mut(
+                    mmap[sa_start as usize..].as_ptr() as *mut u32,
+                    content_len as usize,
+                )
+            };
+
+            let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
+            let mut bins = suffix::Bins::new();
+            suffix::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content_data));
+            sa_start
+        };
+        Ok((sa_start, content_len, pointers_start, pointers_len as u64))
     }
 
-    fn write_trigram_pointers(
-        &mut self,
-        content_range: &Range<u64>,
-    ) -> Result<Range<u64>, Box<dyn std::error::Error>> {
-        let mmap = unsafe { Mmap::map(&self.file)? };
-        let content = &mmap[content_range.start as usize..content_range.end as usize];
-        let pointers = TrigramPointers::from_content(content);
-        let compressed_pointers = pointers.compress();
-        let pointers_start = self.file.seek(SeekFrom::Current(0))?;
-        let mut buf = BufWriter::new(&self.file);
-        let pointers_len = compressed_pointers.serialize_into(&mut buf)?;
-        buf.flush()?;
-        Ok(pointers_start..pointers_start + pointers_len as u64)
-    }
-
-    fn write_header(
-        &self,
-        content_range: Range<u64>,
-        doc_ends_range: Range<u64>,
-        suffixes_range: Range<u64>,
-        trigram_pointers_range: Range<u64>,
+    fn build_header(
+        file: &File,
+        content_ptr: u64,
+        content_len: u64,
+        doc_ends_ptr: u64,
+        doc_ends_len: u64,
+        sa_ptr: u64,
+        sa_len: u64,
+        trigrams_ptr: u64,
+        trigrams_len: u64,
     ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
             _padding: 0,
-            content_ptr: content_range.start,
-            content_len: content_range.end - content_range.start,
-            doc_ends_ptr: doc_ends_range.start,
-            doc_ends_len: (doc_ends_range.end - doc_ends_range.start)
-                / std::mem::size_of::<u32>() as u64,
-            sa_ptr: suffixes_range.start,
-            sa_len: (suffixes_range.end - suffixes_range.start) / std::mem::size_of::<u32>() as u64,
-            trigram_pointers_ptr: trigram_pointers_range.start,
-            trigram_pointers_len: trigram_pointers_range.end - trigram_pointers_range.start,
+            content_ptr,
+            content_len,
+            doc_ends_ptr,
+            doc_ends_len,
+            sa_ptr,
+            sa_len,
+            trigrams_ptr,
+            trigrams_len,
         };
-
-        self.file.write_at(&header.to_bytes(), 0)?;
+        file.write_all_at(&header.to_bytes(), 0)?;
         Ok(header)
     }
 }

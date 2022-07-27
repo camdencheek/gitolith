@@ -1,5 +1,6 @@
 #![feature(core_intrinsics)]
 #![feature(const_char_convert)]
+#![feature(int_roundings)]
 pub mod shard;
 use crate::shard::Shard;
 use clap::{Parser, Subcommand};
