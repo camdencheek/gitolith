@@ -116,11 +116,11 @@ impl ShardBuilder {
             assert!(current_position == pointers_start + pointers_len as u64);
 
             // Round up to the nearest block size so we have aligned blocks for our suffix array
-            let sa_start = current_position.next_multiple_of(SuffixBlock::SIZE_BYTES as u64);
+            let sa_start = next_multiple_of(current_position, SuffixBlock::SIZE_BYTES as u64);
             let sa_end = sa_start + content_len as u64 * std::mem::size_of::<u32>() as u64;
 
             // Round file length to the next block size and move the cursor to the end of the file
-            file.set_len(sa_end.next_multiple_of(SuffixBlock::SIZE_BYTES as u64))?;
+            file.set_len(next_multiple_of(sa_end, SuffixBlock::SIZE_BYTES as u64))?;
             file.seek(io::SeekFrom::End(0))?;
 
             // Reopen mmap after extending file
@@ -169,5 +169,13 @@ impl ShardBuilder {
         };
         file.write_all_at(&header.to_bytes(), 0)?;
         Ok(header)
+    }
+}
+
+// TODO use u64::next_multiple_of() when #88581 stabilizes
+fn next_multiple_of(lhs: u64, rhs: u64) -> u64 {
+    match lhs % rhs {
+        0 => lhs,
+        r => lhs + (rhs - r),
     }
 }

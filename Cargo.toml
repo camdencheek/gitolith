@@ -24,3 +24,6 @@ stretto = "0.5.1"
 
 [profile.release]
 debug = true
+
+[features]
+nightly = []

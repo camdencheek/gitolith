@@ -70,22 +70,6 @@ impl SuffixArrayStore {
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
         Ok(block)
     }
-
-    pub fn sa_file_ptr(&self) -> u64 {
-        self.sa_ptr
-    }
-
-    pub fn sa_len(&self) -> u32 {
-        self.sa_len
-    }
-
-    pub fn trigrams_file_ptr(&self) -> u64 {
-        self.trigrams_ptr
-    }
-
-    pub fn trigrams_len(&self) -> u64 {
-        self.trigrams_len
-    }
 }
 
 // A set of pointers into the suffix array to the end (exclusive) of the range

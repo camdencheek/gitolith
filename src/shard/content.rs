@@ -1,5 +1,4 @@
 use derive_more::{Add, From, Into, Sub};
-use memmap2::Mmap;
 use std::fs::File;
 use std::io;
 use std::ops::Range;
@@ -48,17 +47,5 @@ impl ContentStore {
         let mut buf = vec![0u8; (abs_end - abs_start) as usize];
         (*self.file).read_exact_at(&mut buf, abs_start)?;
         Ok(buf)
-    }
-
-    pub fn slice_from_mmap<'a>(&'_ self, mmap: &'a [u8]) -> &'a [u8] {
-        &mmap[self.file_ptr as usize..self.file_ptr as usize + self.len as usize]
-    }
-
-    pub fn file_ptr(&self) -> u64 {
-        self.file_ptr
-    }
-
-    pub fn len(&self) -> u32 {
-        self.len
     }
 }
