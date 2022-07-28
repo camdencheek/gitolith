@@ -183,4 +183,8 @@ impl CompressedTrigramPointers {
     ) -> Result<usize, Box<dyn std::error::Error>> {
         Ok(self.0.serialize_into(writer)?)
     }
+
+    pub fn size_in_bytes(&self) -> usize {
+        self.0.size_in_bytes()
+    }
 }

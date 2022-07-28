@@ -8,7 +8,13 @@ use std::rc::Rc;
 use sucds::elias_fano::EliasFano;
 
 #[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
-pub struct DocID(u32);
+pub struct DocID(pub u32);
+
+impl From<DocID> for usize {
+    fn from(doc_id: DocID) -> Self {
+        doc_id.0 as usize
+    }
+}
 
 pub struct DocStore {
     file: Rc<File>,
@@ -32,11 +38,13 @@ impl DocStore {
         }
     }
 
+    pub fn doc_ids(&self) -> impl Iterator<Item = DocID> {
+        (0..self.doc_ends_len).into_iter().map(|id| DocID(id))
+    }
+
     pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Vec<u8>, io::Error> {
         let range = doc_ends.content_range(doc_id);
-        let mut buf = Vec::with_capacity(u32::from(range.end - range.start) as usize);
-        (*self.file).read_exact_at(&mut buf, u64::from(range.start))?;
-        Ok(buf)
+        self.content.read(range)
     }
 
     // Returns the list of offsets (relative to the beginning of the content block)
@@ -85,7 +93,7 @@ impl DocEnds {
         if id == DocID(0) {
             ContentIdx(0)..self.0[0]
         } else {
-            self.0[u32::from(id) as usize - 1] + ContentIdx(1)..self.0[u32::from(id) as usize]
+            self.0[usize::from(id) - 1] + ContentIdx(1)..self.0[u32::from(id) as usize]
         }
     }
 

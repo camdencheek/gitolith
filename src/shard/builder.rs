@@ -1,4 +1,5 @@
-use super::suffix::{SuffixArrayStore, SuffixBlock, TrigramPointers};
+use super::docs::DocID;
+use super::suffix::{SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
 use memmap2::{Mmap, MmapMut};
 use std::fs::File;
@@ -34,7 +35,7 @@ impl ShardBuilder {
     }
 
     // Adds a doc to the index and returns its ID
-    pub fn add_doc<T>(&mut self, mut doc: T) -> Result<u32, io::Error>
+    pub fn add_doc<T>(&mut self, mut doc: T) -> Result<DocID, io::Error>
     where
         T: Read,
     {
@@ -43,15 +44,14 @@ impl ShardBuilder {
 
         // Pad each file with a zero byte so each offset in the corpus
         // is unambiguously associated with a single document.
-        const ZERO_BYTE: [u8; 1] = [0; 1];
-        self.file.write_all(&ZERO_BYTE[..])?;
+        self.file.write_all(&[0u8])?;
 
-        // Track the offsets of each document in the concatenated corpus
+        // Track the offsets of each doc-ending zero byte in the concatenated corpus
         match self.doc_ends.as_slice() {
-            [.., last] => self.doc_ends.push(last + doc_len as u32 + 1),
-            [] => self.doc_ends.push(doc_len as u32 + 1),
+            [.., last] => self.doc_ends.push(last + 1 + doc_len as u32),
+            [] => self.doc_ends.push(doc_len as u32),
         };
-        Ok(self.doc_ends.len() as u32 - 1)
+        Ok(DocID(self.doc_ends.len() as u32 - 1))
     }
 
     pub fn build(mut self) -> Result<Shard, Box<dyn std::error::Error>> {
@@ -74,6 +74,8 @@ impl ShardBuilder {
     }
 
     fn build_content(doc_ends: &Vec<u32>) -> (u64, u32) {
+        // The data on disk is build incrementally during add_doc,
+        // so just return the content range here
         (
             ShardHeader::HEADER_SIZE as u64,
             *doc_ends.last().unwrap_or(&0),
@@ -111,6 +113,7 @@ impl ShardBuilder {
 
         let sa_start = {
             let current_position = file.seek(io::SeekFrom::Current(0))?;
+            assert!(current_position == pointers_start + pointers_len as u64);
 
             // Round up to the nearest block size so we have aligned blocks for our suffix array
             let sa_start = current_position.next_multiple_of(SuffixBlock::SIZE_BYTES as u64);
