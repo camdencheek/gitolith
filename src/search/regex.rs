@@ -10,11 +10,6 @@ trait PrefixRangeIterExt: Iterator<Item = PrefixRange> {
     // A lower and upper bound on the length of the byte vec bounds
     // on the yielded PrefixRanges.
     fn prefix_len_bounds(&self) -> (usize, usize);
-
-    // An estimate of the "selectivity" of the set of suffix ranges yielded
-    // by the iterator. Expressed as a proportion of suffixes that are expected
-    // to match given an approximately random text.
-    fn selectivity_hint(&self) -> f64;
 }
 
 enum ExtractedRegexLiterals {
@@ -25,10 +20,54 @@ enum ExtractedRegexLiterals {
     // An inexact extraction requires any matched document to be rechecked. It guarantees that the
     // only documents that can possibly match the original regex query will contain at least one of
     // the prefixes from each of the iterators.
+    //
+    // As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
+    // Inexact(vec![[abc, abd], [efg, efh]])
     Inexact(Vec<PrefixRangeIter>),
+
+    // If no meaningful literals can be extracted from the regex pattern, like /.*/,
+    // the result of extraction will be None.
+    None,
 }
 
-struct RegexRangesBuilder {
+impl ExtractedRegexLiterals {
+    pub fn optimize(&mut self) {
+        *self = match self {
+            Self::None => Self::None,
+            Self::Exact(p) => Self::optimize_exact(p),
+            Self::Inexact(ps) => Self::optimize_inexact(ps),
+        }
+    }
+
+    fn optimize_exact(pri: PrefixRangeIter) -> Self {
+        // Unless we get at least 2 bytes worth of data to work with
+        // it's probably not worth it, so just fall back to unindexed search.
+        // TODO: tune this heuristic
+        if pri.prefix_len_bounds() < 2 {
+            return self::None;
+        }
+    }
+
+    fn optimize_inexact(pris: Vec<PrefixRangeIter>) -> Self {
+        // Sort by minimum prefix size descending
+        pris.sort_by_key(|pri| std::cmp::Reverse(pri.prefix_len_bounds().0));
+        // Only keep the 3 longest prefixes
+        pris.truncate(3);
+    }
+
+    fn limit_len(pri: PrefixRangeIter) -> (PrefixRangeIter, bool) {
+        // TODO: tune this number
+        if pri.len() < 1024 {
+            // No need to truncate, this is a reasonable size to iterate over
+            return (pri, false);
+        }
+
+        let (pred, _) = Self::limit_len(pri.predecessor());
+        (pred, true)
+    }
+}
+
+struct RegexLiteralExtractor {
     // An iterator over the current set of prefixes being built, or
     // None if no prefix set has been started.
     current: Option<PrefixRangeIter>,
@@ -36,23 +75,34 @@ struct RegexRangesBuilder {
     // A set of prefix ranges that have already been extended to their
     // maximum length given a pattern.
     complete: Vec<PrefixRangeIter>,
+
+    exact: bool,
 }
 
-impl RegexRangesBuilder {
+impl RegexLiteralExtractor {
     pub fn from_hir(hir: Hir) -> ExtractedRegexLiterals {
         let mut s = Self {
             current: None,
             complete: Vec::new(),
+            exact: true,
         };
         s.push_hir(hir);
-        s.build()
-    }
 
-    // build finalizes the builder and returns a set of prefix
-    // ranges and whether the prefixes
-    fn build(mut self) -> Vec<PrefixRangeIter> {
-        self.close_current();
-        self.complete
+        match (self.current, exact) {
+            (Some(c), true) => ExtractedRegexLiterals::Exact(c),
+            (None, true) => ExtractedRegexLiterals::None,
+            (Some(c), false) => {
+                self.complete.push(c);
+                ExtractedRegexLiterals::Inexact(self.complete)
+            }
+            (None, false) => {
+                if self.complete.len() == 0 {
+                    ExtractedRegexLiterals::None
+                } else {
+                    ExtractedRegexLiterals::Inexact(self.complete)
+                }
+            }
+        }
     }
 
     fn push_hir(&mut self, hir: Hir) {
@@ -65,10 +115,8 @@ impl RegexRangesBuilder {
             Group(g) => self.push_hir(*g.hir),
             Concat(hirs) => self.push_concat(hirs),
             Alternation(hirs) => self.push_alternation(hirs),
-            // Everything below this line does not help
-            // narrow the search. TODO: see if we can maintain
-            // some structure here so we can use these to filter
-            // after we've generated suffix ranges.
+            // Everything below this does not help narrow the search.
+            // TODO: we may be able to get some value from "one or more" type repetitions.
             Anchor(a) => self.push_anchor(a),
             WordBoundary(wb) => self.push_word_boundary(wb),
             Repetition(rep) => self.push_repetition(rep),
@@ -77,10 +125,7 @@ impl RegexRangesBuilder {
 
     fn close_current(&mut self) {
         if let Some(open) = self.current.take() {
-            let (_, max) = open.prefix_len_bounds();
-            if max > 3 {
-                self.complete.push(open);
-            }
+            self.complete.push(open);
             self.current = None;
         }
     }
@@ -89,6 +134,7 @@ impl RegexRangesBuilder {
     // and marks the document iterator as inexact.
     fn cannot_handle(&mut self) {
         self.close_current();
+        self.exact = false;
     }
 
     fn get_open_mut(&mut self) -> &mut PrefixRangeIter {
@@ -106,7 +152,9 @@ impl RegexRangesBuilder {
             if let Some(c) = &self.current {
                 // Arbitrary limit to avoid exponential growth in the number
                 // of ranges generated by case insensitive search
+                // TODO: do this in a pruning step after generation.
                 if c.len() > 1024 {
+                    self.exact = false;
                     return;
                 }
             }
@@ -256,18 +304,6 @@ impl PrefixRangeIterExt for PrefixRangeIter {
             Alternation(v) => v.prefix_len_bounds(),
         }
     }
-
-    fn selectivity_hint(&self) -> f64 {
-        use PrefixRangeIter::*;
-        match self {
-            Empty(v) => v.selectivity_hint(),
-            ByteLiteral(v) => v.selectivity_hint(),
-            UnicodeLiteral(v) => v.selectivity_hint(),
-            ByteClass(v) => v.selectivity_hint(),
-            UnicodeClass(v) => v.selectivity_hint(),
-            Alternation(v) => v.selectivity_hint(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -296,10 +332,6 @@ impl ExactSizeIterator for EmptyIterator {
 impl PrefixRangeIterExt for EmptyIterator {
     fn prefix_len_bounds(&self) -> (usize, usize) {
         (0, 0)
-    }
-
-    fn selectivity_hint(&self) -> f64 {
-        1.0
     }
 }
 
@@ -344,13 +376,6 @@ impl PrefixRangeIterExt for ByteLiteralAppender {
     fn prefix_len_bounds(&self) -> (usize, usize) {
         let (low, high) = self.predecessor.prefix_len_bounds();
         (low + 1, high + 1)
-    }
-
-    fn selectivity_hint(&self) -> f64 {
-        // We could use real-word character distributions for this.
-        // For now, just estimate that all printable characters
-        // are equally distributed.
-        self.predecessor.selectivity_hint() / 93.0
     }
 }
 
@@ -399,15 +424,6 @@ impl PrefixRangeIterExt for UnicodeLiteralAppender {
         let (low, high) = self.predecessor.prefix_len_bounds();
         (low + char_size, high + char_size)
     }
-
-    fn selectivity_hint(&self) -> f64 {
-        if u32::from(self.char) < 128 {
-            self.predecessor.selectivity_hint() / 93.0
-        } else {
-            // Non-ascii unicode literals are more rare
-            self.predecessor.selectivity_hint() / 500.0
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -415,23 +431,16 @@ pub struct ByteClassAppender {
     product: Box<Product<PrefixRangeIter, std::vec::IntoIter<hir::ClassBytesRange>>>,
     len: usize,
     prefix_len_bounds: (usize, usize),
-    selectivity: f64,
 }
 
 impl ByteClassAppender {
     pub fn new(predecessor: PrefixRangeIter, class: hir::ClassBytes) -> Self {
         let (depth_low, depth_high) = predecessor.prefix_len_bounds();
-        let selectivity = predecessor.selectivity_hint()
-            * class
-                .iter()
-                .map(|r| (r.end() - r.start()) as f64 / 256f64)
-                .sum::<f64>();
         Self {
             // We shouldn't ever overflow, but panic if we do.
             len: predecessor.len().checked_mul(class.ranges().len()).unwrap(),
             product: Box::new(predecessor.cartesian_product(class.ranges().to_vec())),
             prefix_len_bounds: (depth_low + 1, depth_high + 1),
-            selectivity,
         }
     }
 }
@@ -466,17 +475,12 @@ impl PrefixRangeIterExt for ByteClassAppender {
     fn prefix_len_bounds(&self) -> (usize, usize) {
         self.prefix_len_bounds
     }
-
-    fn selectivity_hint(&self) -> f64 {
-        self.selectivity
-    }
 }
 
 #[derive(Clone)]
 pub struct UnicodeClassAppender {
     product: Box<Product<PrefixRangeIter, std::vec::IntoIter<hir::ClassUnicodeRange>>>,
     prefix_len_bounds: (usize, usize),
-    selectivity: f64,
     len: usize,
 }
 
@@ -496,11 +500,6 @@ impl UnicodeClassAppender {
             .end()
             .len_utf8();
 
-        let selectivity = predecessor.selectivity_hint()
-            * class
-                .iter()
-                .map(|r| (u32::from(r.end()) - u32::from(r.start())) as f64 / 144_697f64)
-                .sum::<f64>();
         Self {
             // We shouldn't ever overflow, but panic if we do.
             len: predecessor.len().checked_mul(class.ranges().len()).unwrap(),
@@ -508,7 +507,6 @@ impl UnicodeClassAppender {
                 predecessor.cartesian_product(split_unicode_ranges(class).into_iter()),
             ),
             prefix_len_bounds: (depth_low + min_char_len, depth_high + max_char_len),
-            selectivity,
         }
     }
 }
@@ -539,10 +537,6 @@ impl PrefixRangeIterExt for UnicodeClassAppender {
     fn prefix_len_bounds(&self) -> (usize, usize) {
         self.prefix_len_bounds
     }
-
-    fn selectivity_hint(&self) -> f64 {
-        self.selectivity
-    }
 }
 
 #[derive(Clone)]
@@ -554,7 +548,6 @@ pub struct AlternationAppender {
         >,
     >,
     prefix_len_bounds: (usize, usize),
-    selectivity: f64,
     len: usize,
 }
 
@@ -568,16 +561,10 @@ impl AlternationAppender {
             let new_max = usize::max(acc.1, h);
             (new_min, new_max)
         });
-        let selectivity = pred.selectivity_hint()
-            * alts
-                .iter()
-                .map(PrefixRangeIter::selectivity_hint)
-                .sum::<f64>();
         Self {
             len: pred.len().checked_mul(alts.len()).unwrap(),
             product: Box::new(pred.cartesian_product(alts.into_iter().flatten())),
             prefix_len_bounds: (base_low + alt_low, base_high + alt_high),
-            selectivity,
             // We shouldn't ever overflow, but panic if we do.
         }
     }
@@ -607,10 +594,6 @@ impl ExactSizeIterator for AlternationAppender {
 impl PrefixRangeIterExt for AlternationAppender {
     fn prefix_len_bounds(&self) -> (usize, usize) {
         self.prefix_len_bounds
-    }
-
-    fn selectivity_hint(&self) -> f64 {
-        self.selectivity
     }
 }
 
