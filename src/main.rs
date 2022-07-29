@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use clap::{Parser, Subcommand};
 use regex::Regex;
 use std::error::Error;
@@ -6,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+mod search;
 mod shard;
 use shard::builder::ShardBuilder;
 use shard::Shard;
@@ -95,8 +98,8 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
         .expect("regex str failed to parse for translator");
     dbg!(hir);
 
-    // let handle = std::io::stdout().lock();
-    // let mut buf = std::io::BufWriter::new(handle);
+    let handle = std::io::stdout().lock();
+    let mut buf = std::io::BufWriter::new(handle);
 
     // if skip_index {
     //     let matches = s.search_skip_index(re);

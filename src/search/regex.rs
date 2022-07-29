@@ -9,12 +9,23 @@ type PrefixRange = RangeInclusive<Vec<u8>>;
 trait PrefixRangeIterExt: Iterator<Item = PrefixRange> {
     // A lower and upper bound on the length of the byte vec bounds
     // on the yielded PrefixRanges.
-    fn literal_len_bound(&self) -> (usize, usize);
+    fn prefix_len_bounds(&self) -> (usize, usize);
 
     // An estimate of the "selectivity" of the set of suffix ranges yielded
     // by the iterator. Expressed as a proportion of suffixes that are expected
     // to match given an approximately random text.
     fn selectivity_hint(&self) -> f64;
+}
+
+enum ExtractedRegexLiterals {
+    // An exact extraction indicates that every prefix yielded by the iterator is an exact match to
+    // the input regex pattern and does not need to be rechecked with the original regex pattern.
+    Exact(PrefixRangeIter),
+
+    // An inexact extraction requires any matched document to be rechecked. It guarantees that the
+    // only documents that can possibly match the original regex query will contain at least one of
+    // the prefixes from each of the iterators.
+    Inexact(Vec<PrefixRangeIter>),
 }
 
 struct RegexRangesBuilder {
@@ -28,7 +39,7 @@ struct RegexRangesBuilder {
 }
 
 impl RegexRangesBuilder {
-    pub fn from_hir(hir: Hir) -> Vec<PrefixRangeIter> {
+    pub fn from_hir(hir: Hir) -> ExtractedRegexLiterals {
         let mut s = Self {
             current: None,
             complete: Vec::new(),
@@ -66,7 +77,7 @@ impl RegexRangesBuilder {
 
     fn close_current(&mut self) {
         if let Some(open) = self.current.take() {
-            let (_, max) = open.literal_len_bound();
+            let (_, max) = open.prefix_len_bounds();
             if max > 3 {
                 self.complete.push(open);
             }
@@ -234,15 +245,15 @@ impl ExactSizeIterator for PrefixRangeIter {
 }
 
 impl PrefixRangeIterExt for PrefixRangeIter {
-    fn literal_len_bound(&self) -> (usize, usize) {
+    fn prefix_len_bounds(&self) -> (usize, usize) {
         use PrefixRangeIter::*;
         match self {
-            Empty(v) => v.literal_len_bound(),
-            ByteLiteral(v) => v.literal_len_bound(),
-            UnicodeLiteral(v) => v.literal_len_bound(),
-            ByteClass(v) => v.literal_len_bound(),
-            UnicodeClass(v) => v.literal_len_bound(),
-            Alternation(v) => v.literal_len_bound(),
+            Empty(v) => v.prefix_len_bounds(),
+            ByteLiteral(v) => v.prefix_len_bounds(),
+            UnicodeLiteral(v) => v.prefix_len_bounds(),
+            ByteClass(v) => v.prefix_len_bounds(),
+            UnicodeClass(v) => v.prefix_len_bounds(),
+            Alternation(v) => v.prefix_len_bounds(),
         }
     }
 
@@ -283,7 +294,7 @@ impl ExactSizeIterator for EmptyIterator {
 }
 
 impl PrefixRangeIterExt for EmptyIterator {
-    fn literal_len_bound(&self) -> (usize, usize) {
+    fn prefix_len_bounds(&self) -> (usize, usize) {
         (0, 0)
     }
 
@@ -330,8 +341,8 @@ impl ExactSizeIterator for ByteLiteralAppender {
 }
 
 impl PrefixRangeIterExt for ByteLiteralAppender {
-    fn literal_len_bound(&self) -> (usize, usize) {
-        let (low, high) = self.predecessor.literal_len_bound();
+    fn prefix_len_bounds(&self) -> (usize, usize) {
+        let (low, high) = self.predecessor.prefix_len_bounds();
         (low + 1, high + 1)
     }
 
@@ -383,9 +394,9 @@ impl ExactSizeIterator for UnicodeLiteralAppender {
 }
 
 impl PrefixRangeIterExt for UnicodeLiteralAppender {
-    fn literal_len_bound(&self) -> (usize, usize) {
+    fn prefix_len_bounds(&self) -> (usize, usize) {
         let char_size = self.char.len_utf8();
-        let (low, high) = self.predecessor.literal_len_bound();
+        let (low, high) = self.predecessor.prefix_len_bounds();
         (low + char_size, high + char_size)
     }
 
@@ -403,13 +414,13 @@ impl PrefixRangeIterExt for UnicodeLiteralAppender {
 pub struct ByteClassAppender {
     product: Box<Product<PrefixRangeIter, std::vec::IntoIter<hir::ClassBytesRange>>>,
     len: usize,
-    literal_len_bound: (usize, usize),
+    prefix_len_bounds: (usize, usize),
     selectivity: f64,
 }
 
 impl ByteClassAppender {
     pub fn new(predecessor: PrefixRangeIter, class: hir::ClassBytes) -> Self {
-        let (depth_low, depth_high) = predecessor.literal_len_bound();
+        let (depth_low, depth_high) = predecessor.prefix_len_bounds();
         let selectivity = predecessor.selectivity_hint()
             * class
                 .iter()
@@ -419,7 +430,7 @@ impl ByteClassAppender {
             // We shouldn't ever overflow, but panic if we do.
             len: predecessor.len().checked_mul(class.ranges().len()).unwrap(),
             product: Box::new(predecessor.cartesian_product(class.ranges().to_vec())),
-            literal_len_bound: (depth_low + 1, depth_high + 1),
+            prefix_len_bounds: (depth_low + 1, depth_high + 1),
             selectivity,
         }
     }
@@ -452,8 +463,8 @@ impl ExactSizeIterator for ByteClassAppender {
 }
 
 impl PrefixRangeIterExt for ByteClassAppender {
-    fn literal_len_bound(&self) -> (usize, usize) {
-        self.literal_len_bound
+    fn prefix_len_bounds(&self) -> (usize, usize) {
+        self.prefix_len_bounds
     }
 
     fn selectivity_hint(&self) -> f64 {
@@ -464,14 +475,14 @@ impl PrefixRangeIterExt for ByteClassAppender {
 #[derive(Clone)]
 pub struct UnicodeClassAppender {
     product: Box<Product<PrefixRangeIter, std::vec::IntoIter<hir::ClassUnicodeRange>>>,
-    literal_len_bound: (usize, usize),
+    prefix_len_bounds: (usize, usize),
     selectivity: f64,
     len: usize,
 }
 
 impl UnicodeClassAppender {
     pub fn new(predecessor: PrefixRangeIter, class: hir::ClassUnicode) -> Self {
-        let (depth_low, depth_high) = predecessor.literal_len_bound();
+        let (depth_low, depth_high) = predecessor.prefix_len_bounds();
         let min_char_len = class
             .ranges()
             .first()
@@ -496,7 +507,7 @@ impl UnicodeClassAppender {
             product: Box::new(
                 predecessor.cartesian_product(split_unicode_ranges(class).into_iter()),
             ),
-            literal_len_bound: (depth_low + min_char_len, depth_high + max_char_len),
+            prefix_len_bounds: (depth_low + min_char_len, depth_high + max_char_len),
             selectivity,
         }
     }
@@ -525,8 +536,8 @@ impl ExactSizeIterator for UnicodeClassAppender {
 }
 
 impl PrefixRangeIterExt for UnicodeClassAppender {
-    fn literal_len_bound(&self) -> (usize, usize) {
-        self.literal_len_bound
+    fn prefix_len_bounds(&self) -> (usize, usize) {
+        self.prefix_len_bounds
     }
 
     fn selectivity_hint(&self) -> f64 {
@@ -542,7 +553,7 @@ pub struct AlternationAppender {
             std::iter::Flatten<std::vec::IntoIter<PrefixRangeIter>>,
         >,
     >,
-    literal_len_hint: (usize, usize),
+    prefix_len_bounds: (usize, usize),
     selectivity: f64,
     len: usize,
 }
@@ -550,9 +561,9 @@ pub struct AlternationAppender {
 impl AlternationAppender {
     fn new(pred: PrefixRangeIter, alts: Vec<PrefixRangeIter>) -> Self {
         assert!(!alts.is_empty());
-        let (base_low, base_high) = pred.literal_len_bound();
+        let (base_low, base_high) = pred.prefix_len_bounds();
         let (alt_low, alt_high) = alts.iter().fold((usize::MAX, 0), |acc, it| {
-            let (l, h) = it.literal_len_bound();
+            let (l, h) = it.prefix_len_bounds();
             let new_min = usize::min(acc.0, l);
             let new_max = usize::max(acc.1, h);
             (new_min, new_max)
@@ -565,7 +576,7 @@ impl AlternationAppender {
         Self {
             len: pred.len().checked_mul(alts.len()).unwrap(),
             product: Box::new(pred.cartesian_product(alts.into_iter().flatten())),
-            literal_len_hint: (base_low + alt_low, base_high + alt_high),
+            prefix_len_bounds: (base_low + alt_low, base_high + alt_high),
             selectivity,
             // We shouldn't ever overflow, but panic if we do.
         }
@@ -594,8 +605,8 @@ impl ExactSizeIterator for AlternationAppender {
 }
 
 impl PrefixRangeIterExt for AlternationAppender {
-    fn literal_len_bound(&self) -> (usize, usize) {
-        self.literal_len_hint
+    fn prefix_len_bounds(&self) -> (usize, usize) {
+        self.prefix_len_bounds
     }
 
     fn selectivity_hint(&self) -> f64 {
