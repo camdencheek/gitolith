@@ -17,6 +17,7 @@ impl PrefixRangeSet {
     }
 
     pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
+        debug_assert!(state < self.len());
         start.clear();
         end.clear();
 
@@ -117,111 +118,80 @@ enum ExtractedRegexLiterals {
     None,
 }
 
-struct RegexLiteralExtractor {
-    current: Vec<LiteralSet>,
-    complete: Vec<PrefixRangeSet>,
-    exact: bool,
-}
+fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
+    struct Env {
+        current: Vec<LiteralSet>,
+        complete: Vec<PrefixRangeSet>,
+        exact: bool,
+    }
 
-impl RegexLiteralExtractor {
-    pub fn from_hir(hir: Hir) -> ExtractedRegexLiterals {
-        let mut s = Self {
-            current: Vec::new(),
-            complete: Vec::new(),
-            exact: true,
-        };
-        s.push_hir(hir);
+    impl Env {
+        fn cannot_handle(&mut self) {
+            self.close_current();
+            self.exact = false;
+        }
 
-        match (s.current.len(), s.exact) {
-            (0, true) => ExtractedRegexLiterals::None,
-            (_, true) => ExtractedRegexLiterals::Exact(PrefixRangeSet::new(s.current)),
-            (_, false) => {
-                s.complete.push(PrefixRangeSet::new(s.current));
-                ExtractedRegexLiterals::Inexact(s.complete)
-            }
+        fn close_current(&mut self) {
+            self.complete.push(PrefixRangeSet::new(std::mem::replace(
+                &mut self.current,
+                Vec::new(),
+            )));
         }
     }
 
-    fn push_hir(&mut self, hir: Hir) {
-        use regex_syntax::hir::HirKind::*;
+    fn push_hir(env: &mut Env, hir: Hir) {
+        use regex_syntax::hir::{Class, HirKind, Literal};
 
         match hir.into_kind() {
-            Empty => {}
-            Literal(lit) => self.push_literal(lit),
-            Class(class) => self.push_class(class),
-            Group(g) => self.push_hir(*g.hir),
-            Concat(hirs) => self.push_concat(hirs),
-            Alternation(hirs) => self.push_alternation(hirs),
-            // Everything below this does not help narrow the search.
-            // TODO: we may be able to get some value from "one or more" type repetitions.
-            Anchor(a) => self.push_anchor(a),
-            WordBoundary(wb) => self.push_word_boundary(wb),
-            Repetition(rep) => self.push_repetition(rep),
-        }
-    }
-
-    fn close_current(&mut self) {
-        self.complete.push(PrefixRangeSet::new(std::mem::replace(
-            &mut self.current,
-            Vec::new(),
-        )));
-        self.current = Vec::new();
-    }
-
-    // cannot_handle marks the current set of prefixes as complete
-    // and marks the document iterator as inexact.
-    fn cannot_handle(&mut self) {
-        self.close_current();
-        self.exact = false;
-    }
-
-    fn push_concat(&mut self, hirs: Vec<Hir>) {
-        for child in hirs.into_iter() {
-            self.push_hir(child);
-        }
-    }
-
-    fn push_literal(&mut self, lit: hir::Literal) {
-        use hir::Literal;
-
-        self.current.push(match lit {
-            Literal::Byte(b) => LiteralSet::Byte(b),
-            Literal::Unicode(char) => LiteralSet::Unicode(char),
-        })
-    }
-
-    fn push_class(&mut self, class: hir::Class) {
-        use hir::Class;
-
-        self.current.push(match class {
-            Class::Bytes(bc) => LiteralSet::ByteClass(bc.ranges().to_vec()),
-            Class::Unicode(uc) => LiteralSet::UnicodeClass(uc.ranges().to_vec()),
-        })
-    }
-
-    fn push_alternation(&mut self, alts: Vec<Hir>) {
-        let mut alt_iters = Vec::with_capacity(alts.len());
-        for alt in alts {
-            match Self::from_hir(alt) {
-                ExtractedRegexLiterals::Exact(e) => alt_iters.push(e),
-                // We don't handle anything but simple alternations right now.
-                _ => return self.cannot_handle(),
+            HirKind::Literal(lit) => env.current.push(match lit {
+                Literal::Byte(b) => LiteralSet::Byte(b),
+                Literal::Unicode(char) => LiteralSet::Unicode(char),
+            }),
+            HirKind::Class(class) => env.current.push(match class {
+                Class::Bytes(bc) => LiteralSet::ByteClass(bc.ranges().to_vec()),
+                Class::Unicode(uc) => LiteralSet::UnicodeClass(split_unicode_ranges(uc.ranges())),
+            }),
+            HirKind::Group(g) => push_hir(env, *g.hir),
+            HirKind::Concat(hirs) => {
+                for child in hirs.into_iter() {
+                    push_hir(env, child)
+                }
             }
+            HirKind::Alternation(hirs) => {
+                let mut alt_iters = Vec::with_capacity(hirs.len());
+                for alt in hirs {
+                    match extract_regex_literals(alt) {
+                        ExtractedRegexLiterals::Exact(e) => alt_iters.push(e),
+                        _ => {
+                            env.cannot_handle();
+                            return;
+                        }
+                    }
+                }
+                env.current.push(LiteralSet::Alternation(alt_iters))
+            }
+            _ => env.cannot_handle(),
         }
+    };
 
-        self.current.push(LiteralSet::Alternation(alt_iters))
-    }
+    let mut env = Env {
+        current: Vec::new(),
+        complete: Vec::new(),
+        exact: true,
+    };
 
-    fn push_anchor(&mut self, _anchor: hir::Anchor) {
-        self.cannot_handle();
-    }
+    push_hir(&mut env, hir);
 
-    fn push_word_boundary(&mut self, _wb: hir::WordBoundary) {
-        self.cannot_handle();
-    }
-
-    fn push_repetition(&mut self, _rep: hir::Repetition) {
-        self.cannot_handle();
+    match (env.current.len(), env.exact) {
+        (0, true) => ExtractedRegexLiterals::None,
+        (_, true) => {
+            assert!(env.complete.len() == 0);
+            ExtractedRegexLiterals::Exact(PrefixRangeSet::new(env.current))
+        }
+        (_, false) => {
+            env.complete.push(PrefixRangeSet::new(env.current));
+            ExtractedRegexLiterals::Inexact(env.complete)
+        }
     }
 }
 
