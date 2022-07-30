@@ -74,6 +74,7 @@ impl SuffixArrayStore {
     }
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Box<SuffixBlock>, io::Error> {
+        // TODO assert that the block ID is in range
         let abs_start = self.sa_ptr + block_id.0 as u64 * SuffixBlock::SIZE_BYTES as u64;
         let mut block = SuffixBlock::new();
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
@@ -86,6 +87,40 @@ impl SuffixArrayStore {
         let mut buf = vec![0u8; self.trigrams_len as usize];
         self.file.read_exact_at(&mut buf, self.trigrams_ptr)?;
         CompressedTrigramPointers::deserialize_from(buf.as_slice())
+    }
+
+    pub fn iter_blocks(&self, range: Range<SuffixBlockID>) -> SuffixBlockIter<'_> {
+        SuffixBlockIter::new(self, range)
+    }
+}
+
+pub struct SuffixBlockIter<'a> {
+    store: &'a SuffixArrayStore,
+    range: Range<SuffixBlockID>,
+    next: SuffixBlockID,
+}
+
+impl<'a> SuffixBlockIter<'a> {
+    fn new(store: &'a SuffixArrayStore, range: Range<SuffixBlockID>) -> Self {
+        Self {
+            store,
+            next: range.start,
+            range,
+        }
+    }
+}
+
+impl<'a> Iterator for SuffixBlockIter<'a> {
+    type Item = Result<Box<SuffixBlock>, io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next >= self.range.end {
+            None
+        } else {
+            let cur = self.next;
+            self.next = cur + SuffixBlockID(1);
+            Some(self.store.read_block(cur))
+        }
     }
 }
 
