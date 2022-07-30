@@ -88,42 +88,6 @@ impl SuffixArrayStore {
         self.file.read_exact_at(&mut buf, self.trigrams_ptr)?;
         CompressedTrigramPointers::deserialize_from(buf.as_slice())
     }
-
-    pub fn iter_blocks(&self, range: Range<SuffixBlockID>) -> SuffixBlockIter<'_> {
-        SuffixBlockIter::new(self, range)
-    }
-
-    pub fn iter_suffix_blocks()
-}
-
-pub struct SuffixBlockIter<'a> {
-    store: &'a SuffixArrayStore,
-    range: Range<SuffixBlockID>,
-    next: SuffixBlockID,
-}
-
-impl<'a> SuffixBlockIter<'a> {
-    fn new(store: &'a SuffixArrayStore, range: Range<SuffixBlockID>) -> Self {
-        Self {
-            store,
-            next: range.start,
-            range,
-        }
-    }
-}
-
-impl<'a> Iterator for SuffixBlockIter<'a> {
-    type Item = Result<Box<SuffixBlock>, io::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next >= self.range.end {
-            None
-        } else {
-            let cur = self.next;
-            self.next = cur + SuffixBlockID(1);
-            Some(self.store.read_block(cur))
-        }
-    }
 }
 
 // A set of pointers into the suffix array to the end (exclusive) of the range

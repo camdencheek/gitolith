@@ -63,12 +63,7 @@ fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
     let s = Shard::open(&args.shard)?;
 
     let mut query = args.query.as_str();
-    if query.starts_with('/') && query.ends_with('/') && query.len() >= 2 {
-        query = query.strip_prefix('/').unwrap().strip_suffix('/').unwrap();
-        search_regex(s, query, args.skip_index)?;
-    } else {
-        // search_literal(s, query)
-    };
+    search_regex(s, query, args.skip_index)?;
     Ok(())
 }
 
@@ -208,21 +203,4 @@ fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Box<dyn Er
     builder.add_doc(s.as_bytes())?;
     builder.build()?;
     Ok(())
-}
-
-struct LazyFileReader {
-    path: PathBuf,
-    f: Option<File>,
-}
-
-impl Read for LazyFileReader {
-    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        match &mut self.f {
-            Some(file) => file.read(&mut buf),
-            None => {
-                self.f = Some(File::open(&self.path)?);
-                self.read(&mut buf)
-            }
-        }
-    }
 }
