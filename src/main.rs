@@ -96,10 +96,49 @@ fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn E
     let hir = regex_syntax::hir::translate::Translator::new()
         .translate(re.as_str(), &ast)
         .expect("regex str failed to parse for translator");
-    dbg!(hir);
 
     let handle = std::io::stdout().lock();
     let mut buf = std::io::BufWriter::new(handle);
+
+    let extracted = search::regex::extract_regex_literals(hir);
+    match extracted {
+        search::regex::ExtractedRegexLiterals::None => {
+            println!("No literals extracted")
+        }
+        search::regex::ExtractedRegexLiterals::Exact(set) => {
+            let mut start = Vec::new();
+            let mut end = Vec::new();
+            for i in 0..dbg!(set.len()) {
+                set.write_state_to(i, &mut start, &mut end);
+                buf.write(b"Exact: ")?;
+                buf.write(&start)?;
+                buf.write(b"..=")?;
+                buf.write(&end)?;
+                buf.write(b"\n")?;
+                start.clear();
+                end.clear();
+            }
+        }
+        search::regex::ExtractedRegexLiterals::Inexact(all) => {
+            for (i, set) in all.iter().enumerate() {
+                buf.write_fmt(format_args!("Inexact set #{}", i))?;
+                let mut start = Vec::new();
+                let mut end = Vec::new();
+                for i in 0..set.len() {
+                    set.write_state_to(i, &mut start, &mut end);
+                    buf.write(b"Exact: ")?;
+                    buf.write(&start)?;
+                    buf.write(b"..=")?;
+                    buf.write(&end)?;
+                    buf.write(b"\n")?;
+                    start.clear();
+                    end.clear();
+                }
+            }
+        }
+    }
+    // let handle = std::io::stdout().lock();
+    // let mut buf = std::io::BufWriter::new(handle);
 
     // if skip_index {
     //     let matches = s.search_skip_index(re);

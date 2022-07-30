@@ -4,7 +4,7 @@ use std::{io::Write, ops::RangeInclusive};
 use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrefixRangeSet(Vec<LiteralSet>);
 
 impl PrefixRangeSet {
@@ -18,24 +18,18 @@ impl PrefixRangeSet {
 
     pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
         debug_assert!(state < self.len());
-        start.clear();
-        end.clear();
 
-        let mut cur_place = self.0.len();
-        let with_place_values = self.0.iter().map(|ls| {
-            cur_place /= ls.len();
-            (ls, cur_place)
-        });
-
-        for (ls, place_value) in with_place_values {
-            let rem = state % place_value;
+        let mut place_value = self.len();
+        for ls in self.0.iter() {
+            place_value /= ls.len();
             let ls_state = state / place_value;
-            ls.write_state_to(state, start, end);
+            state = state % place_value;
+            ls.write_state_to(ls_state, start, end);
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum LiteralSet {
     Byte(u8),
     Unicode(char),
@@ -93,14 +87,16 @@ impl LiteralSet {
                         state -= prefix_set.len();
                         continue;
                     }
-                    prefix_set.write_state_to(state, start, end)
+                    prefix_set.write_state_to(state, start, end);
+                    break;
                 }
             }
         };
     }
 }
 
-enum ExtractedRegexLiterals {
+#[derive(Clone, Debug)]
+pub enum ExtractedRegexLiterals {
     // An exact extraction indicates that every prefix yielded by the iterator is an exact match to
     // the input regex pattern and does not need to be rechecked with the original regex pattern.
     Exact(PrefixRangeSet),
@@ -118,7 +114,7 @@ enum ExtractedRegexLiterals {
     None,
 }
 
-fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
+pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
     struct Env {
         current: Vec<LiteralSet>,
         complete: Vec<PrefixRangeSet>,
@@ -132,10 +128,12 @@ fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
         }
 
         fn close_current(&mut self) {
-            self.complete.push(PrefixRangeSet::new(std::mem::replace(
-                &mut self.current,
-                Vec::new(),
-            )));
+            if self.current.len() > 0 {
+                self.complete.push(PrefixRangeSet::new(std::mem::replace(
+                    &mut self.current,
+                    Vec::new(),
+                )));
+            }
         }
     }
 
@@ -189,8 +187,14 @@ fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
             ExtractedRegexLiterals::Exact(PrefixRangeSet::new(env.current))
         }
         (_, false) => {
-            env.complete.push(PrefixRangeSet::new(env.current));
-            ExtractedRegexLiterals::Inexact(env.complete)
+            if env.current.len() > 0 {
+                env.complete.push(PrefixRangeSet::new(env.current));
+            }
+            if env.complete.len() > 0 {
+                ExtractedRegexLiterals::Inexact(env.complete)
+            } else {
+                ExtractedRegexLiterals::None
+            }
         }
     }
 }
