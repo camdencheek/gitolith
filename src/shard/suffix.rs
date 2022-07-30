@@ -8,7 +8,7 @@ use std::rc::Rc;
 use sucds::elias_fano::EliasFano;
 use sucds::{EliasFanoBuilder, Searial};
 
-use super::content::ContentStore;
+use super::content::{ContentIdx, ContentStore};
 
 #[derive(Copy, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixIdx(pub u32);
@@ -16,17 +16,20 @@ pub struct SuffixIdx(pub u32);
 #[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixBlockID(pub u32);
 
-pub struct SuffixBlock([u32; Self::SIZE_SUFFIXES]);
+pub struct SuffixBlock([ContentIdx; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
     pub const SIZE_SUFFIXES: usize = 2048;
     pub const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
 
-    fn new() -> Self {
-        Self([0u32; Self::SIZE_SUFFIXES])
+    fn new() -> Box<Self> {
+        Box::new(Self([ContentIdx(0); Self::SIZE_SUFFIXES]))
     }
 
     fn as_bytes_mut(&mut self) -> &mut [u8] {
+        // TODO guarantee this is actually safe. I _think_ a single-element tuple struct will
+        // always have the same representation as its only element, but I'm not 100% sure.
+        // Maybe #[repr(C)] would help on ContentIdx
         unsafe { std::slice::from_raw_parts_mut(self.0.as_ptr() as *mut u8, Self::SIZE_BYTES) }
     }
 }
@@ -70,7 +73,7 @@ impl SuffixArrayStore {
         SuffixBlockID(u32::from(suffix) / SuffixBlock::SIZE_SUFFIXES as u32)
     }
 
-    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, io::Error> {
+    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Box<SuffixBlock>, io::Error> {
         let abs_start = self.sa_ptr + block_id.0 as u64 * SuffixBlock::SIZE_BYTES as u64;
         let mut block = SuffixBlock::new();
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
