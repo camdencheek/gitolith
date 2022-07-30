@@ -89,7 +89,7 @@ impl LiteralSet {
             Byte(b) => {
                 debug_assert!(state == 0);
                 start.push(*b);
-                end.extend_from_slice(&[*b]);
+                end.push(*b);
             }
             Unicode(c) => {
                 debug_assert!(state == 0);
@@ -100,8 +100,8 @@ impl LiteralSet {
             }
             ByteClass(v) => {
                 let class = v[state];
-                start.extend_from_slice(&[class.start()]);
-                end.extend_from_slice(&[class.end()]);
+                start.push(class.start());
+                end.push(class.end());
             }
             UnicodeClass(v) => {
                 let class = v[state];

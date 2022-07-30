@@ -92,6 +92,8 @@ impl SuffixArrayStore {
     pub fn iter_blocks(&self, range: Range<SuffixBlockID>) -> SuffixBlockIter<'_> {
         SuffixBlockIter::new(self, range)
     }
+
+    pub fn iter_suffix_blocks()
 }
 
 pub struct SuffixBlockIter<'a> {
