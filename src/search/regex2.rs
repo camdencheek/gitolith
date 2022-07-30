@@ -2,60 +2,35 @@ use std::ops::Range;
 use std::{io::Write, ops::RangeInclusive};
 
 use itertools::Itertools;
-use regex_syntax::hir;
+use regex_syntax::hir::{self, Hir};
 
 #[derive(Clone)]
-struct PrefixRangeSet(Vec<LiteralSet>);
+pub struct PrefixRangeSet(Vec<LiteralSet>);
 
 impl PrefixRangeSet {
-    pub fn new(&self, concat: Vec<LiteralSet>) -> Self {
+    pub fn new(concat: Vec<LiteralSet>) -> Self {
         Self(concat)
     }
 
     pub fn len(&self) -> usize {
         self.0.iter().map(LiteralSet::len).product()
     }
-}
 
-struct PrefixRangeSetIter<'a> {
-    set: &'a PrefixRangeSet,
-    place_values: Vec<usize>,
-    state: Range<usize>,
-}
+    pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
+        start.clear();
+        end.clear();
 
-impl<'a> PrefixRangeSetIter<'a> {
-    pub fn new(set: &'a PrefixRangeSet) -> Self {
-        let mut place = set.len();
-        Self {
-            set,
-            place_values: set
-                .0
-                .iter()
-                .map(|l| {
-                    place /= l.len();
-                    place
-                })
-                .collect(),
-            state: 0..set.len(),
+        let mut cur_place = self.0.len();
+        let with_place_values = self.0.iter().map(|ls| {
+            cur_place /= ls.len();
+            (ls, cur_place)
+        });
+
+        for (ls, place_value) in with_place_values {
+            let rem = state % place_value;
+            let ls_state = state / place_value;
+            ls.write_state_to(state, start, end);
         }
-    }
-
-    pub fn write_state_to(&self, mut state: usize, range: &mut Range<Vec<u8>>) {
-        range.start.clear();
-        range.end.clear();
-        for (i, ls) in self.set.0.iter().enumerate() {
-            let rem = state % self.place_values[i];
-            let ls_state = state / self.place_values[i];
-            self.set.0[i].write_state_to(state, &mut range.start, &mut range.end);
-        }
-    }
-}
-
-impl<'a> Iterator for PrefixRangeSetIter<'a> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.state.next()
     }
 }
 
@@ -65,7 +40,7 @@ pub enum LiteralSet {
     Unicode(char),
     ByteClass(Vec<hir::ClassBytesRange>),
     UnicodeClass(Vec<hir::ClassUnicodeRange>),
-    Alternation(Vec<LiteralSet>),
+    Alternation(Vec<PrefixRangeSet>),
 }
 
 impl LiteralSet {
@@ -112,12 +87,12 @@ impl LiteralSet {
             }
             Alternation(v) => {
                 let mut state = state;
-                for lc in v {
-                    if state >= lc.len() {
-                        state -= lc.len();
+                for prefix_set in v {
+                    if state >= prefix_set.len() {
+                        state -= prefix_set.len();
                         continue;
                     }
-                    lc.write_state_to(state, start, end)
+                    prefix_set.write_state_to(state, start, end)
                 }
             }
         };
@@ -141,40 +116,28 @@ enum ExtractedRegexLiterals {
     // the result of extraction will be None.
     None,
 }
+
 struct RegexLiteralExtractor {
-    // An iterator over the current set of prefixes being built, or
-    // None if no prefix set has been started.
-    current: Option<PrefixRangeIter>,
-
-    // A set of prefix ranges that have already been extended to their
-    // maximum length given a pattern.
-    complete: Vec<PrefixRangeIter>,
-
+    current: Vec<LiteralSet>,
+    complete: Vec<PrefixRangeSet>,
     exact: bool,
 }
 
 impl RegexLiteralExtractor {
     pub fn from_hir(hir: Hir) -> ExtractedRegexLiterals {
         let mut s = Self {
-            current: None,
+            current: Vec::new(),
             complete: Vec::new(),
             exact: true,
         };
         s.push_hir(hir);
 
-        match (s.current, s.exact) {
-            (Some(c), true) => ExtractedRegexLiterals::Exact(c),
-            (None, true) => ExtractedRegexLiterals::None,
-            (Some(c), false) => {
-                s.complete.push(c);
+        match (s.current.len(), s.exact) {
+            (0, true) => ExtractedRegexLiterals::None,
+            (_, true) => ExtractedRegexLiterals::Exact(PrefixRangeSet::new(s.current)),
+            (_, false) => {
+                s.complete.push(PrefixRangeSet::new(s.current));
                 ExtractedRegexLiterals::Inexact(s.complete)
-            }
-            (None, false) => {
-                if s.complete.len() == 0 {
-                    ExtractedRegexLiterals::None
-                } else {
-                    ExtractedRegexLiterals::Inexact(s.complete)
-                }
             }
         }
     }
@@ -198,10 +161,11 @@ impl RegexLiteralExtractor {
     }
 
     fn close_current(&mut self) {
-        if let Some(open) = self.current.take() {
-            self.complete.push(open);
-            self.current = None;
-        }
+        self.complete.push(PrefixRangeSet::new(std::mem::replace(
+            &mut self.current,
+            Vec::new(),
+        )));
+        self.current = Vec::new();
     }
 
     // cannot_handle marks the current set of prefixes as complete
@@ -211,55 +175,28 @@ impl RegexLiteralExtractor {
         self.exact = false;
     }
 
-    fn take_current(&mut self) -> PrefixRangeIter {
-        match self.current.take() {
-            Some(o) => o,
-            None => PrefixRangeIter::Empty(EmptyIterator::new()),
-        }
-    }
-
     fn push_concat(&mut self, hirs: Vec<Hir>) {
         for child in hirs.into_iter() {
-            if let Some(c) = &self.current {
-                // Arbitrary limit to avoid exponential growth in the number
-                // of ranges generated by case insensitive search
-                // TODO: do this in a pruning step after generation.
-                if c.len() > 1024 {
-                    self.exact = false;
-                    return;
-                }
-            }
             self.push_hir(child);
         }
     }
 
     fn push_literal(&mut self, lit: hir::Literal) {
         use hir::Literal;
-        let current = self.take_current();
 
-        self.current = match lit {
-            Literal::Byte(b) => Some(PrefixRangeIter::ByteLiteral(Box::new(
-                ByteLiteralAppender::new(current, b),
-            ))),
-            Literal::Unicode(char) => Some(PrefixRangeIter::UnicodeLiteral(Box::new(
-                UnicodeLiteralAppender::new(current, char),
-            ))),
-        }
+        self.current.push(match lit {
+            Literal::Byte(b) => LiteralSet::Byte(b),
+            Literal::Unicode(char) => LiteralSet::Unicode(char),
+        })
     }
 
     fn push_class(&mut self, class: hir::Class) {
         use hir::Class;
 
-        let current = self.take_current();
-
-        self.current = match class {
-            Class::Bytes(ref bc) => Some(PrefixRangeIter::ByteClass(Box::new(
-                ByteClassAppender::new(current, bc.clone()),
-            ))),
-            Class::Unicode(ref uc) => Some(PrefixRangeIter::UnicodeClass(Box::new(
-                UnicodeClassAppender::new(current, uc.clone()),
-            ))),
-        }
+        self.current.push(match class {
+            Class::Bytes(bc) => LiteralSet::ByteClass(bc.ranges().to_vec()),
+            Class::Unicode(uc) => LiteralSet::UnicodeClass(uc.ranges().to_vec()),
+        })
     }
 
     fn push_alternation(&mut self, alts: Vec<Hir>) {
@@ -272,10 +209,7 @@ impl RegexLiteralExtractor {
             }
         }
 
-        let current = self.take_current();
-        self.current = Some(PrefixRangeIter::Alternation(Box::new(
-            AlternationAppender::new(current, alt_iters),
-        )))
+        self.current.push(LiteralSet::Alternation(alt_iters))
     }
 
     fn push_anchor(&mut self, _anchor: hir::Anchor) {
