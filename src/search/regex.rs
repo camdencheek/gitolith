@@ -5,6 +5,25 @@ use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
 
 #[derive(Clone, Debug)]
+pub enum ExtractedRegexLiterals {
+    // An exact extraction indicates that every prefix yielded by the iterator is an exact match to
+    // the input regex pattern and does not need to be rechecked with the original regex pattern.
+    Exact(PrefixRangeSet),
+
+    // An inexact extraction requires any matched document to be rechecked. It guarantees that the
+    // only documents that can possibly match the original regex query will contain at least one of
+    // the prefixes from each of the iterators.
+    //
+    // As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
+    // Inexact(vec![[abc, abd], [efg, efh]])
+    Inexact(Vec<PrefixRangeSet>),
+
+    // If no meaningful literals can be extracted from the regex pattern, like /.*/,
+    // the result of extraction will be None.
+    None,
+}
+
+#[derive(Clone, Debug)]
 pub struct PrefixRangeSet(Vec<LiteralSet>);
 
 impl PrefixRangeSet {
@@ -12,6 +31,10 @@ impl PrefixRangeSet {
         Self(concat)
     }
 
+    // Len is the number of prefix ranges represented by this PrefixRangeSet.
+    // The i-th prefix range can be extracted using `write_state_to(i, ...)`.
+    // TODO it might be convenient to just index PrefixRangeSet and capture
+    // the state generation in a new struct.
     pub fn len(&self) -> usize {
         self.0.iter().map(LiteralSet::len).product()
     }
@@ -19,6 +42,9 @@ impl PrefixRangeSet {
     pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
         debug_assert!(state < self.len());
 
+        // TODO document this. Intuition is treating the PrefixRangeSet as a mixed-radix number
+        // where digit[i] has base self.0[i].len(). We do this because we don't want to allocate
+        // extra and then we can iterate over the states with a single, incrementing usize.
         let mut place_value = self.len();
         for ls in self.0.iter() {
             place_value /= ls.len();
@@ -35,6 +61,11 @@ pub enum LiteralSet {
     Unicode(char),
     ByteClass(Vec<hir::ClassBytesRange>),
     UnicodeClass(Vec<hir::ClassUnicodeRange>),
+    // TODO: it would be very convenient if we could know that the prefixes we iterate over are
+    // ordered and non-overlapping because then we could use the results of one search to narrow
+    // the results of the following search. Unfortunately, alternations break that invariant
+    // because we don't deduplicate the prefixes of alternations at all. /a(b|b)c/ will yield
+    // two separate but identical ranges.
     Alternation(Vec<PrefixRangeSet>),
 }
 
@@ -57,28 +88,28 @@ impl LiteralSet {
         match self {
             Byte(b) => {
                 debug_assert!(state == 0);
-                start.write(&[*b]);
-                end.write(&[*b]);
+                start.push(*b);
+                end.extend_from_slice(&[*b]);
             }
             Unicode(c) => {
                 debug_assert!(state == 0);
                 let mut buf = [0u8; 4];
                 let bytes = c.encode_utf8(&mut buf).as_bytes();
-                start.write(bytes);
-                end.write(bytes);
+                start.extend_from_slice(bytes);
+                end.extend_from_slice(bytes);
             }
             ByteClass(v) => {
                 let class = v[state];
-                start.write(&[class.start()]);
-                end.write(&[class.end()]);
+                start.extend_from_slice(&[class.start()]);
+                end.extend_from_slice(&[class.end()]);
             }
             UnicodeClass(v) => {
                 let class = v[state];
                 let mut buf = [0u8; 4];
                 let start_bytes = class.start().encode_utf8(&mut buf).as_bytes();
-                start.write(start_bytes);
+                start.extend_from_slice(start_bytes);
                 let end_bytes = class.start().encode_utf8(&mut buf).as_bytes();
-                end.write(end_bytes);
+                end.extend_from_slice(end_bytes);
             }
             Alternation(v) => {
                 let mut state = state;
@@ -93,25 +124,6 @@ impl LiteralSet {
             }
         };
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum ExtractedRegexLiterals {
-    // An exact extraction indicates that every prefix yielded by the iterator is an exact match to
-    // the input regex pattern and does not need to be rechecked with the original regex pattern.
-    Exact(PrefixRangeSet),
-
-    // An inexact extraction requires any matched document to be rechecked. It guarantees that the
-    // only documents that can possibly match the original regex query will contain at least one of
-    // the prefixes from each of the iterators.
-    //
-    // As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
-    // Inexact(vec![[abc, abd], [efg, efh]])
-    Inexact(Vec<PrefixRangeSet>),
-
-    // If no meaningful literals can be extracted from the regex pattern, like /.*/,
-    // the result of extraction will be None.
-    None,
 }
 
 pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
