@@ -1,5 +1,5 @@
 #![allow(unused)]
 
 pub mod cache;
-pub mod regex;
+pub mod search;
 pub mod shard;
