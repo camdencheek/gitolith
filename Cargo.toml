@@ -21,6 +21,7 @@ memmap2 = "0.5.5"
 derive_more = "0.99.17"
 sucds = "0.4.0"
 stretto = "0.5.1"
+anyhow = "1.0.58"
 
 [profile.release]
 debug = true

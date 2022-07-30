@@ -42,12 +42,13 @@ impl Shard {
         );
         let docs = DocStore::new(
             Rc::clone(&file),
-            content,
+            content.clone(),
             header.doc_ends_ptr,
             header.doc_ends_len as u32,
         );
         let suffixes = SuffixArrayStore::new(
             Rc::clone(&file),
+            content,
             header.sa_ptr,
             header.sa_len as u32,
             header.trigrams_ptr,

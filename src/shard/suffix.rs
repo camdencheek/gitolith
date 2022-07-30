@@ -1,11 +1,14 @@
+use anyhow::Error;
 use derive_more::{Add, AddAssign, From, Into, Sub};
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::prelude::FileExt;
 use std::rc::Rc;
 use sucds::elias_fano::EliasFano;
 use sucds::{EliasFanoBuilder, Searial};
+
+use super::content::ContentStore;
 
 #[derive(Copy, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixIdx(pub u32);
@@ -30,6 +33,7 @@ impl SuffixBlock {
 
 pub struct SuffixArrayStore {
     file: Rc<File>,
+    content: ContentStore,
     // Pointer to the suffix array relative to the start of the file
     sa_ptr: u64,
     // Length in u32s, not bytes
@@ -43,6 +47,7 @@ impl SuffixArrayStore {
 
     pub fn new(
         file: Rc<File>,
+        content: ContentStore,
         sa_ptr: u64,
         sa_len: u32,
         trigrams_ptr: u64,
@@ -52,6 +57,7 @@ impl SuffixArrayStore {
 
         Self {
             file,
+            content,
             sa_ptr,
             sa_len,
             trigrams_ptr,
@@ -69,6 +75,14 @@ impl SuffixArrayStore {
         let mut block = SuffixBlock::new();
         (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
         Ok(block)
+    }
+
+    pub fn read_trigram_pointers(
+        &self,
+    ) -> Result<CompressedTrigramPointers, ReadTrigramPointersError> {
+        let mut buf = vec![0u8; self.trigrams_len as usize];
+        self.file.read_exact_at(&mut buf, self.trigrams_ptr)?;
+        CompressedTrigramPointers::deserialize_from(buf.as_slice())
     }
 }
 
@@ -164,11 +178,30 @@ impl CompressedTrigramPointers {
     pub fn serialize_into<W: std::io::Write>(
         &self,
         writer: W,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<usize, WriteTrigramPointersError> {
         Ok(self.0.serialize_into(writer)?)
+    }
+
+    pub fn deserialize_from<R: Read>(reader: R) -> Result<Self, ReadTrigramPointersError> {
+        Ok(Self(EliasFano::deserialize_from(reader)?))
     }
 
     pub fn size_in_bytes(&self) -> usize {
         self.0.size_in_bytes()
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("failed to write trigram pointers")]
+pub struct WriteTrigramPointersError {
+    #[from]
+    source: anyhow::Error,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ReadTrigramPointersError {
+    #[error("failed to read trigram pointers")]
+    IO(#[from] io::Error),
+    #[error("failed to deserialize trigram pointers")]
+    Deserialize(#[from] anyhow::Error),
 }
