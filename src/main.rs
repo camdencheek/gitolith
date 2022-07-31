@@ -9,8 +9,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+mod cache;
 mod search;
 mod shard;
+
 use shard::builder::ShardBuilder;
 use shard::Shard;
 

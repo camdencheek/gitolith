@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod cached;
 pub mod content;
 pub mod suffix;
 
@@ -14,7 +15,7 @@ use docs::DocStore;
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash, Debug)]
 pub struct ShardID(u16);
 
 #[derive(Clone)]

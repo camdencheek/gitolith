@@ -62,10 +62,6 @@ impl DocStore {
         Ok(DocEnds(doc_ends))
     }
 
-    pub fn doc_ends_file_ptr(&self) -> u64 {
-        self.doc_ends_ptr
-    }
-
     pub fn num_docs(&self) -> u32 {
         self.doc_ends_len
     }
@@ -79,11 +75,16 @@ pub struct CachedDocStore {
     doc_store: DocStore,
 }
 
+#[derive(Debug)]
 pub struct DocEnds(Vec<ContentIdx>);
 
 impl DocEnds {
     pub fn new(v: Vec<ContentIdx>) -> Self {
         Self(v)
+    }
+
+    pub fn doc_count(&self) -> usize {
+        self.0.len()
     }
 
     // Returns the id of the document that contains the given content offset.

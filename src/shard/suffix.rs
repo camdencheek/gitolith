@@ -16,6 +16,7 @@ pub struct SuffixIdx(pub u32);
 #[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixBlockID(pub u32);
 
+#[derive(Debug)]
 pub struct SuffixBlock([ContentIdx; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
@@ -47,8 +48,6 @@ pub struct SuffixArrayStore {
 }
 
 impl SuffixArrayStore {
-    const BLOCK_SIZE: usize = 8192;
-
     pub fn new(
         file: Arc<File>,
         content: ContentStore,
@@ -128,6 +127,7 @@ impl TrigramPointers {
     }
 }
 
+#[derive(Debug)]
 pub struct CompressedTrigramPointers(EliasFano);
 
 impl CompressedTrigramPointers {
