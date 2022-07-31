@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io;
 use std::ops::Range;
 use std::os::unix::prelude::FileExt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct ContentIdx(pub u32);
@@ -22,13 +22,13 @@ impl From<ContentIdx> for u64 {
 
 #[derive(Debug, Clone)]
 pub struct ContentStore {
-    file: Rc<File>,
+    file: Arc<File>,
     file_ptr: u64,
     len: u32,
 }
 
 impl ContentStore {
-    pub fn new(file: Rc<File>, content_ptr: u64, content_len: u32) -> Self {
+    pub fn new(file: Arc<File>, content_ptr: u64, content_len: u32) -> Self {
         Self {
             file,
             file_ptr: content_ptr,

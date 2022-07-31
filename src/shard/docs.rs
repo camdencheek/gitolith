@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io;
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
-use std::rc::Rc;
+use std::sync::Arc;
 use sucds::elias_fano::EliasFano;
 
 #[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
@@ -18,7 +18,7 @@ impl From<DocID> for usize {
 
 #[derive(Clone)]
 pub struct DocStore {
-    file: Rc<File>,
+    file: Arc<File>,
     content: ContentStore,
     doc_ends_ptr: u64,
     doc_ends_len: u32,
@@ -26,7 +26,7 @@ pub struct DocStore {
 
 impl DocStore {
     pub fn new(
-        file: Rc<File>,
+        file: Arc<File>,
         content: ContentStore,
         doc_ends_ptr: u64,
         doc_ends_len: u32,

@@ -51,6 +51,9 @@ pub struct ListArgs {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build_global()?;
     let args = Cli::parse();
     match args.cmd {
         Command::Index(a) => build_index(a)?,

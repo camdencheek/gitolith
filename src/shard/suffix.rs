@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::ops::{Range, RangeInclusive};
 use std::os::unix::prelude::FileExt;
-use std::rc::Rc;
+use std::sync::Arc;
 use sucds::elias_fano::EliasFano;
 use sucds::{EliasFanoBuilder, Searial};
 
@@ -36,7 +36,7 @@ impl SuffixBlock {
 
 #[derive(Clone)]
 pub struct SuffixArrayStore {
-    file: Rc<File>,
+    file: Arc<File>,
     content: ContentStore,
     // Pointer to the suffix array relative to the start of the file
     sa_ptr: u64,
@@ -50,7 +50,7 @@ impl SuffixArrayStore {
     const BLOCK_SIZE: usize = 8192;
 
     pub fn new(
-        file: Rc<File>,
+        file: Arc<File>,
         content: ContentStore,
         sa_ptr: u64,
         sa_len: u32,

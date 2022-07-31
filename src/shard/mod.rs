@@ -12,7 +12,7 @@ use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
 use std::io::Write;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash)]
 pub struct ShardID(u16);
@@ -35,20 +35,20 @@ impl Shard {
         file.read_at(&mut buf[..], 0)?;
         let header = ShardHeader::from_bytes(&buf[..])?;
 
-        let file = Rc::new(file);
+        let file = Arc::new(file);
         let content = ContentStore::new(
-            Rc::clone(&file),
+            Arc::clone(&file),
             header.content_ptr,
             header.content_len as u32,
         );
         let docs = DocStore::new(
-            Rc::clone(&file),
+            Arc::clone(&file),
             content.clone(),
             header.doc_ends_ptr,
             header.doc_ends_len as u32,
         );
         let suffixes = SuffixArrayStore::new(
-            Rc::clone(&file),
+            Arc::clone(&file),
             content,
             header.sa_ptr,
             header.sa_len as u32,
