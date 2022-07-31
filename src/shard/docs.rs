@@ -16,6 +16,7 @@ impl From<DocID> for usize {
     }
 }
 
+#[derive(Clone)]
 pub struct DocStore {
     file: Rc<File>,
     content: ContentStore,
@@ -67,6 +68,10 @@ impl DocStore {
 
     pub fn num_docs(&self) -> u32 {
         self.doc_ends_len
+    }
+
+    pub fn max_doc_id(&self) -> DocID {
+        DocID(self.num_docs() - 1)
     }
 }
 

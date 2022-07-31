@@ -34,6 +34,7 @@ impl SuffixBlock {
     }
 }
 
+#[derive(Clone)]
 pub struct SuffixArrayStore {
     file: Rc<File>,
     content: ContentStore,

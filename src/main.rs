@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use regex::Regex;
+use search::search_regex;
 use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -62,8 +63,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn search(args: SearchArgs) -> Result<(), Box<dyn Error>> {
     let s = Shard::open(&args.shard)?;
 
-    let mut query = args.query.as_str();
-    search_regex(s, query, args.skip_index)?;
+    let handle = std::io::stdout().lock();
+    let mut buf = std::io::BufWriter::new(handle);
+
+    for doc_match in search_regex(&s, &args.query, args.skip_index)? {
+        let doc_match = doc_match?;
+        buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
+        for r in doc_match.matches {
+            buf.write_fmt(format_args!(
+                "{}\n",
+                std::str::from_utf8(&doc_match.content[r.start as usize..r.end as usize])?,
+            ))?;
+        }
+    }
     Ok(())
 }
 
@@ -82,96 +94,6 @@ fn list(args: ListArgs) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
-fn search_regex(s: Shard, query: &str, skip_index: bool) -> Result<(), Box<dyn Error>> {
-    let re = Regex::new(query)?;
-    let ast = regex_syntax::ast::parse::Parser::new()
-        .parse(re.as_str())
-        .expect("regex str failed to parse as AST");
-    let hir = regex_syntax::hir::translate::Translator::new()
-        .translate(re.as_str(), &ast)
-        .expect("regex str failed to parse for translator");
-
-    let handle = std::io::stdout().lock();
-    let mut buf = std::io::BufWriter::new(handle);
-
-    let extracted = search::regex::extract_regex_literals(hir);
-    match extracted {
-        search::regex::ExtractedRegexLiterals::None => {
-            println!("No literals extracted")
-        }
-        search::regex::ExtractedRegexLiterals::Exact(set) => {
-            let mut start = Vec::new();
-            let mut end = Vec::new();
-            for i in 0..dbg!(set.len()) {
-                set.write_state_to(i, &mut start, &mut end);
-                buf.write(b"Exact: ")?;
-                buf.write(&start)?;
-                buf.write(b"..=")?;
-                buf.write(&end)?;
-                buf.write(b"\n")?;
-                start.clear();
-                end.clear();
-            }
-        }
-        search::regex::ExtractedRegexLiterals::Inexact(all) => {
-            for (i, set) in all.iter().enumerate() {
-                buf.write_fmt(format_args!("Inexact set #{}", i))?;
-                let mut start = Vec::new();
-                let mut end = Vec::new();
-                for i in 0..set.len() {
-                    set.write_state_to(i, &mut start, &mut end);
-                    buf.write(b"Exact: ")?;
-                    buf.write(&start)?;
-                    buf.write(b"..=")?;
-                    buf.write(&end)?;
-                    buf.write(b"\n")?;
-                    start.clear();
-                    end.clear();
-                }
-            }
-        }
-    }
-    // let handle = std::io::stdout().lock();
-    // let mut buf = std::io::BufWriter::new(handle);
-
-    // if skip_index {
-    //     let matches = s.search_skip_index(re);
-    //     for m in matches {
-    //         println!("Doc #{}", m.doc.id);
-    //         for r in m.matched_ranges {
-    //             println!(
-    //                 "\t{}",
-    //                 std::str::from_utf8(&m.doc.content[r.start as usize..r.end as usize])?
-    //             );
-    //         }
-    //     }
-    // } else {
-    // let matches = s.search(&re);
-    // for m in matches {
-    //     buf.write_fmt(format_args!("DocID: {}\n", m.doc.id))?;
-    //     for range in m.matches {
-    //         buf.write(&m.doc.content[range.start as usize..range.end as usize])?;
-    //         buf.write(b"\n")?;
-    //     }
-    // }
-    // }
-
-    Ok(())
-}
-
-// fn search_literal(s: Shard, query: &str) -> Result<(), Box<dyn Error>> {
-//     let b = query.as_bytes();
-//     dbg!(&b);
-//     let matches = s.sa().find(b..=b);
-//     for m in matches {
-//         let mut suffix = s.suffix(m);
-//         suffix = &suffix[..usize::min(suffix.len(), query.len())];
-
-//         println!("{}", String::from_utf8(suffix.to_vec())?);
-//     }
-//     Ok(())
-// }
 
 fn build_index(args: IndexArgs) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = args.dir {

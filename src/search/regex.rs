@@ -214,6 +214,7 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
 // splits a unicode class into a set of ranges that each have a uniform length when
 // encoded to utf8. This allows us to generate accurate prefixes and depth hints
 // for unicode.
+// TODO this function can probably be simplified
 fn split_unicode_ranges(ranges: &[hir::ClassUnicodeRange]) -> Vec<hir::ClassUnicodeRange> {
     fn char_unchecked(c: u32) -> char {
         // TODO use char::from_u32_unchecked once #89259 stabilizes

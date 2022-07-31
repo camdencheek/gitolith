@@ -17,6 +17,7 @@ use std::rc::Rc;
 #[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash)]
 pub struct ShardID(u16);
 
+#[derive(Clone)]
 pub struct Shard {
     pub header: ShardHeader,
     pub docs: DocStore,
@@ -63,13 +64,7 @@ impl Shard {
     }
 }
 
-// pub struct CachedShard {
-//     shard: Shard,
-//     cache: Cache,
-// }
-
-#[repr(C)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ShardHeader {
     pub version: u16,
     pub flags: u16,
