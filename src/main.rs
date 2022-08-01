@@ -47,6 +47,10 @@ pub struct SearchArgs {
     pub query: String,
     #[clap(long = "skip-index")]
     pub skip_index: bool,
+    #[clap(long = "count-only")]
+    pub count_only: bool,
+    #[clap(long = "repeat", short = 'r', default_value = "1")]
+    pub repeat: usize,
 }
 
 #[derive(Parser, Debug)]
@@ -73,7 +77,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
     let c = cache::new_cache(4 * 1024 * 1024 * 1024); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
-    for i in 0..10 {
+    for i in 0..args.repeat {
         let start = Instant::now();
 
         let handle = std::io::stdout().lock();
@@ -81,16 +85,23 @@ fn search(args: SearchArgs) -> Result<(), Error> {
 
         let mut count = 0;
         for doc_match in search_regex(&cs, &args.query, args.skip_index)? {
-            count += 1;
-            // let doc_match = doc_match?;
-            // buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
-            // for r in doc_match.matches {
-            //     buf.write_fmt(format_args!(
-            //         "{}\n",
-            //         std::str::from_utf8(&doc_match.content[r.start as usize..r.end as usize])?,
-            //     ))?;
-            // }
+            let doc_match = doc_match?;
+            if !args.count_only {
+                buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
+            }
+            for r in doc_match.matches {
+                count += 1;
+
+                if !args.count_only {
+                    buf.write_fmt(format_args!(
+                        "{}\n",
+                        std::str::from_utf8(&doc_match.content[r.start as usize..r.end as usize])?,
+                    ))?;
+                }
+            }
         }
+        buf.flush()?;
+
         println!(
             "Iter: {}, Count: {}, Elapsed: {:?}",
             i,
