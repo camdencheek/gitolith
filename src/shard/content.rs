@@ -37,6 +37,11 @@ impl ContentStore {
     }
 
     pub fn read(&self, range: Range<ContentIdx>) -> Result<Vec<u8>, io::Error> {
+        // No need to hit the disk for empty files
+        if range.start == range.end {
+            return Ok(Vec::new());
+        }
+
         // Calculate the absolute file offsets for the given range
         let abs_start = u64::from(range.start) + self.file_ptr;
         let abs_end = u64::from(range.end) + self.file_ptr;

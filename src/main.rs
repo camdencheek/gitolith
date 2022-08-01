@@ -148,6 +148,11 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
     let mut builder = ShardBuilder::new(&Path::new(&output_shard))?;
     for entry in documents {
         let f = File::open(entry.path())?;
+        let l = f.metadata()?.len();
+        if l > (2 << 20) {
+            println!("skipping file {:?} with size {}", entry.path(), l);
+            continue;
+        }
         builder.add_doc(f)?;
     }
     builder.build()?;
