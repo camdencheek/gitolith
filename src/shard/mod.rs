@@ -3,6 +3,7 @@ pub mod cached;
 pub mod content;
 pub mod suffix;
 
+use anyhow::Error;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
@@ -16,7 +17,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 #[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash, Debug)]
-pub struct ShardID(u16);
+pub struct ShardID(pub u16);
 
 #[derive(Clone)]
 pub struct Shard {
@@ -26,12 +27,12 @@ pub struct Shard {
 }
 
 impl Shard {
-    pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn open(path: &Path) -> Result<Self, Error> {
         let f = File::open(path)?;
         Self::from_file(f)
     }
 
-    fn from_file(file: File) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_file(file: File) -> Result<Self, Error> {
         let mut buf = [0u8; ShardHeader::HEADER_SIZE];
         file.read_at(&mut buf[..], 0)?;
         let header = ShardHeader::from_bytes(&buf[..])?;
@@ -105,7 +106,7 @@ impl ShardHeader {
         buf
     }
 
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
         Ok(Self {
             version: u16::from_le_bytes(buf[0..2].try_into()?),
             flags: u16::from_le_bytes(buf[2..4].try_into()?),

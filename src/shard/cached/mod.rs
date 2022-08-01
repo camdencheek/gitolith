@@ -20,19 +20,30 @@ pub struct CachedShard {
 }
 
 impl CachedShard {
-    fn new(id: ShardID, shard: Shard, cache: Cache) -> Self {
+    pub fn new(id: ShardID, shard: Shard, cache: Cache) -> Self {
         Self { id, shard, cache }
+    }
+
+    pub fn docs(&self) -> CachedDocs {
+        CachedDocs::new(self.id, self.shard.docs.clone(), self.cache.clone())
     }
 }
 
 pub struct CachedDocs {
     shard_id: ShardID,
     docs: DocStore,
-    content: ContentStore,
     cache: Cache,
 }
 
 impl CachedDocs {
+    pub fn new(shard_id: ShardID, docs: DocStore, cache: Cache) -> Self {
+        Self {
+            shard_id,
+            docs,
+            cache,
+        }
+    }
+
     pub fn doc_ids(&self) -> impl Iterator<Item = DocID> {
         self.docs.doc_ids()
     }

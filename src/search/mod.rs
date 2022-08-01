@@ -1,8 +1,11 @@
+use anyhow::Error;
 use std::io::{self, Write};
 use std::ops::Range;
+use std::sync::Arc;
 
 use ::regex::bytes::Regex;
 
+use crate::shard::cached::{CachedDocs, CachedShard};
 use crate::shard::{
     docs::{CompressedDocEnds, DocEnds, DocID, DocStore},
     Shard,
@@ -16,14 +19,14 @@ pub mod regex;
 pub struct DocMatch {
     pub id: DocID,
     pub matches: Vec<Range<u32>>,
-    pub content: Vec<u8>,
+    pub content: Arc<Vec<u8>>,
 }
 
 pub fn search_regex(
-    s: &Shard,
+    s: &CachedShard,
     query: &str,
     skip_index: bool,
-) -> Result<Box<dyn Iterator<Item = Result<DocMatch, io::Error>>>, Box<dyn std::error::Error>> {
+) -> Result<Box<dyn Iterator<Item = Result<DocMatch, Error>>>, Error> {
     let re = Regex::new(query)?;
     let ast = regex_syntax::ast::parse::Parser::new()
         .parse(re.as_str())
@@ -39,14 +42,14 @@ pub fn search_regex(
     };
     // TODO optimize extracted
     //
-    let doc_ends = s.docs.read_doc_ends()?;
-    let doc_ids = s.docs.doc_ids();
+    let doc_ends = s.docs().read_doc_ends()?;
+    let doc_ids = s.docs().doc_ids();
 
     match extracted {
         ExtractedRegexLiterals::None => {
             return Ok(Box::new(ParallelDocChecker::new(
                 doc_ids,
-                s.docs.clone(),
+                s.docs(),
                 doc_ends,
                 re,
             )));
@@ -62,16 +65,16 @@ pub fn search_regex(
 
 struct SequentialDocChecker<T> {
     doc_ids: T,
-    doc_store: DocStore,
+    docs: CachedDocs,
     doc_ends: DocEnds,
     re: Regex,
 }
 
 impl<T> SequentialDocChecker<T> {
-    fn new(doc_ids: T, doc_store: DocStore, doc_ends: DocEnds, re: Regex) -> Self {
+    fn new(doc_ids: T, docs: CachedDocs, doc_ends: DocEnds, re: Regex) -> Self {
         Self {
             doc_ids,
-            doc_store,
+            docs,
             doc_ends,
             re,
         }
@@ -82,14 +85,14 @@ impl<T> Iterator for SequentialDocChecker<T>
 where
     T: Iterator<Item = DocID>,
 {
-    type Item = Result<DocMatch, io::Error>;
+    type Item = Result<DocMatch, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Loop until we find a doc with matches
         loop {
             let doc_id = self.doc_ids.next()?;
-            let content = match self.doc_store.read_content(doc_id, &self.doc_ends) {
-                Err(e) => return Some(Err(e)),
+            let content = match self.docs.read_content(doc_id, &self.doc_ends) {
+                Err(e) => return Some(Err(e.into())),
                 Ok(content) => content,
             };
 
@@ -112,11 +115,11 @@ where
 
 struct ParallelDocChecker<T: Send + Sync> {
     doc_ids: T,
-    doc_store: DocStore,
-    doc_ends: DocEnds,
+    docs: CachedDocs,
+    doc_ends: Arc<DocEnds>,
     re: Regex,
     id_buffer: Vec<Option<DocID>>,
-    result_buffer: Vec<Option<Result<DocMatch, io::Error>>>,
+    result_buffer: Vec<Option<Result<DocMatch, Error>>>,
     result_buffer_next_idx: usize,
 }
 
@@ -130,12 +133,12 @@ where
     // kick off workers in the background, we can keep searching will processing a batch.
     // Realistically, I'm not sure how useful this is since we already get decent single-shard
     // performance, and we'll parallelize across shards anyways.
-    const BUFFER_SIZE: usize = 128;
+    const BUFFER_SIZE: usize = 256;
 
-    fn new(doc_ids: T, doc_store: DocStore, doc_ends: DocEnds, re: Regex) -> Self {
+    fn new(doc_ids: T, docs: CachedDocs, doc_ends: Arc<DocEnds>, re: Regex) -> Self {
         Self {
             doc_ids,
-            doc_store,
+            docs,
             doc_ends,
             re,
             id_buffer: vec![None; Self::BUFFER_SIZE],
@@ -146,7 +149,7 @@ where
 
     fn fill_buffer(&mut self) {
         let mut id_buffer: Vec<Option<DocID>> = std::mem::take(&mut self.id_buffer);
-        let mut result_buffer: Vec<Option<Result<DocMatch, io::Error>>> =
+        let mut result_buffer: Vec<Option<Result<DocMatch, Error>>> =
             std::mem::take(&mut self.result_buffer);
 
         id_buffer.fill(None);
@@ -168,7 +171,7 @@ where
     fn search_ids(
         &self,
         id_buf: &mut [Option<DocID>],
-        result_buf: &mut [Option<Result<DocMatch, io::Error>>],
+        result_buf: &mut [Option<Result<DocMatch, Error>>],
     ) {
         if id_buf.len() == 1 {
             if let Some(id) = id_buf[0] {
@@ -187,8 +190,8 @@ where
         }
     }
 
-    fn search_id(&self, doc_id: DocID) -> Result<DocMatch, io::Error> {
-        let content = self.doc_store.read_content(doc_id, &self.doc_ends)?;
+    fn search_id(&self, doc_id: DocID) -> Result<DocMatch, Error> {
+        let content = self.docs.read_content(doc_id, &self.doc_ends)?;
         let matched_ranges: Vec<Range<u32>> = self
             .re
             .find_iter(&content)
@@ -207,7 +210,7 @@ impl<T> Iterator for ParallelDocChecker<T>
 where
     T: Iterator<Item = DocID> + Send + Sync,
 {
-    type Item = Result<DocMatch, io::Error>;
+    type Item = Result<DocMatch, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {

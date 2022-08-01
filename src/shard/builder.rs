@@ -1,6 +1,7 @@
 use super::docs::DocID;
 use super::suffix::{SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
+use anyhow::Error;
 use memmap2::{Mmap, MmapMut};
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -54,7 +55,7 @@ impl ShardBuilder {
         Ok(DocID(self.doc_ends.len() as u32 - 1))
     }
 
-    pub fn build(mut self) -> Result<Shard, Box<dyn std::error::Error>> {
+    pub fn build(mut self) -> Result<Shard, Error> {
         let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
         let (doc_starts_ptr, doc_starts_len) = Self::build_docs(&mut self.file, &self.doc_ends)?;
         let (suffix_ptr, suffix_len, trigram_ptr, trigram_len) =
@@ -97,7 +98,7 @@ impl ShardBuilder {
         file: &mut File,
         content_ptr: u64,
         content_len: u32,
-    ) -> Result<(u64, u32, u64, u64), Box<dyn std::error::Error>> {
+    ) -> Result<(u64, u32, u64, u64), Error> {
         let (pointers_start, pointers_len) = {
             let mmap = unsafe { Mmap::map(&*file)? };
             let content_data =
