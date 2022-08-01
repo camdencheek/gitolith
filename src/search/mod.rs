@@ -122,7 +122,7 @@ struct ParallelDocChecker<T> {
     re: Arc<Regex>,
     senders: Vec<Sender<Result<DocMatch, Error>>>,
     receivers: Vec<Receiver<Result<DocMatch, Error>>>,
-    next_idx: Cycle<Range<usize>>,
+    next_receiver: Cycle<Range<usize>>,
 }
 
 impl<T> ParallelDocChecker<T>
@@ -139,7 +139,7 @@ where
             re: Arc::new(re),
             senders: Vec::new(),
             receivers: Vec::new(),
-            next_idx: (0..Self::QUEUE_SIZE).cycle(),
+            next_receiver: (0..Self::QUEUE_SIZE).cycle(),
         }
     }
 
@@ -207,7 +207,7 @@ where
         }
 
         loop {
-            let idx = self.next_idx.next().unwrap();
+            let idx = self.next_receiver.next().unwrap();
             let rx = self.receivers[idx].clone();
             match rx.recv() {
                 Err(RecvError) => return None,
