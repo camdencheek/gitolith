@@ -29,6 +29,7 @@ impl CachedShard {
     }
 }
 
+#[derive(Clone)]
 pub struct CachedDocs {
     shard_id: ShardID,
     docs: DocStore,

@@ -1,4 +1,5 @@
 use anyhow::Error;
+use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
 use std::io::{self, Write};
 use std::ops::Range;
 use std::sync::Arc;
@@ -47,7 +48,7 @@ pub fn search_regex(
 
     match extracted {
         ExtractedRegexLiterals::None => {
-            return Ok(Box::new(ParallelDocChecker::new(
+            return Ok(Box::new(ParallelDocChecker2::new(
                 doc_ids,
                 s.docs(),
                 doc_ends,
@@ -133,7 +134,7 @@ where
     // kick off workers in the background, we can keep searching will processing a batch.
     // Realistically, I'm not sure how useful this is since we already get decent single-shard
     // performance, and we'll parallelize across shards anyways.
-    const BUFFER_SIZE: usize = 256;
+    const BUFFER_SIZE: usize = 64;
 
     fn new(doc_ids: T, docs: CachedDocs, doc_ends: Arc<DocEnds>, re: Regex) -> Self {
         Self {
@@ -230,6 +231,118 @@ where
                     }
                 }
                 e @ Err(_) => return Some(e),
+            }
+        }
+    }
+}
+
+struct ParallelDocChecker2<T> {
+    doc_ids: T,
+    docs: Arc<CachedDocs>,
+    doc_ends: Arc<DocEnds>,
+    re: Arc<Regex>,
+    senders: Vec<Sender<Result<DocMatch, Error>>>,
+    receivers: Vec<Receiver<Result<DocMatch, Error>>>,
+    next_idx: usize,
+}
+
+impl<T> ParallelDocChecker2<T>
+where
+    T: Iterator<Item = DocID>,
+{
+    const QUEUE_SIZE: usize = 128;
+
+    fn new(doc_ids: T, docs: CachedDocs, doc_ends: Arc<DocEnds>, re: Regex) -> Self {
+        Self {
+            doc_ids,
+            docs: Arc::new(docs),
+            doc_ends,
+            re: Arc::new(re),
+            senders: Vec::new(),
+            receivers: Vec::new(),
+            next_idx: 0,
+        }
+    }
+
+    fn init(&mut self) {
+        self.senders = Vec::with_capacity(Self::QUEUE_SIZE);
+        self.receivers = Vec::with_capacity(Self::QUEUE_SIZE);
+        for i in 0..Self::QUEUE_SIZE {
+            let (tx, rx) = bounded(1);
+            self.receivers.push(rx);
+            self.senders.push(tx);
+            self.spawn_task(i);
+        }
+    }
+
+    fn spawn_task(&mut self, idx: usize) {
+        let doc_id = match self.doc_ids.next() {
+            Some(id) => id,
+            None => {
+                let (tx, rx) = bounded(1);
+                self.senders[idx] = tx;
+                return;
+            }
+        };
+
+        let docs = self.docs.clone();
+        let doc_ends = self.doc_ends.clone();
+        let re = self.re.clone();
+        let tx = self.senders[idx].clone();
+
+        rayon::spawn_fifo(move || {
+            let res = Self::search_doc(docs, doc_ends, doc_id, re);
+            tx.send(res);
+        });
+    }
+
+    fn search_doc(
+        docs: Arc<CachedDocs>,
+        doc_ends: Arc<DocEnds>,
+        doc_id: DocID,
+        re: Arc<Regex>,
+    ) -> Result<DocMatch, Error> {
+        let content = docs.read_content(doc_id, &doc_ends)?;
+        let matched_ranges: Vec<Range<u32>> = re
+            .find_iter(&content)
+            .map(|m| m.start() as u32..m.end() as u32)
+            .collect();
+
+        Ok(DocMatch {
+            id: doc_id,
+            matches: matched_ranges,
+            content,
+        })
+    }
+}
+
+impl<T> Iterator for ParallelDocChecker2<T>
+where
+    T: Iterator<Item = DocID>,
+{
+    type Item = Result<DocMatch, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.senders.len() == 0 {
+            self.init();
+        }
+
+        loop {
+            if self.next_idx >= self.receivers.len() {
+                self.next_idx = 0;
+            }
+
+            let rx = self.receivers[self.next_idx].clone();
+            match rx.recv() {
+                Err(RecvError) => return None,
+                Ok(e @ Err(_)) => return Some(e),
+                Ok(Ok(doc_match)) => {
+                    self.spawn_task(self.next_idx);
+                    self.next_idx += 1;
+                    if doc_match.matches.len() > 0 {
+                        return Some(Ok(doc_match));
+                    }
+                }
             }
         }
     }
