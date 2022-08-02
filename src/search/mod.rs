@@ -1,4 +1,5 @@
 use anyhow::Error;
+use bitvec::{self, vec::BitVec};
 use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
 use std::io::{self, Write};
 use std::iter::Cycle;
@@ -15,7 +16,7 @@ use crate::shard::{
     Shard,
 };
 
-use self::regex::{extract_regex_literals, ExtractedRegexLiterals};
+use self::regex::{extract_regex_literals, ExtractedRegexLiterals, PrefixRangeSet};
 
 pub mod regex;
 
@@ -85,6 +86,35 @@ pub fn search_regex(
     }
 }
 
+// struct InexactDocIterator {
+//     candidate_docs: BitVec,
+//     remaining_candidate_docs: usize,
+//     page_iters: Vec<ContentIdxPageIterator>,
+//     doc_ends: Arc<DocEnds>,
+// }
+
+// impl InexactDocIterator {
+//     fn new(
+//         mut page_iters: Vec<ContentIdxPageIterator>,
+//         docs: CachedDocs,
+//         doc_ends: Arc<DocEnds>,
+//     ) -> Self {
+//         // Sort by smallest first to filter out as many docs as possible
+//         page_iters.sort_by_key(ContentIdxPageIterator::len_total);
+
+//         Self {
+//             page_iters,
+//             doc_ends,
+//             candidate_docs: bitvec::bitvec![1; docs.num_docs() as usize],
+//             remaining_candidate_docs: docs.num_docs() as usize,
+//         }
+//     }
+// }
+
+// impl Iterator for InexactDocIterator {
+//     type Item = Result<DocID,
+// }
+
 struct ContentIdxPageIterator {
     block_range: Range<(SuffixBlockID, usize)>,
     next_block_id: SuffixBlockID,
@@ -101,6 +131,12 @@ impl ContentIdxPageIterator {
             suffixes,
             current_block: None,
         }
+    }
+
+    fn len_total(&self) -> usize {
+        u32::from(self.block_range.end.0 - self.block_range.start.0) as usize
+            * SuffixBlock::SIZE_SUFFIXES
+            + (self.block_range.end.1 - self.block_range.start.1)
     }
 
     fn next(&mut self) -> Option<Result<&[ContentIdx], Error>> {
@@ -179,7 +215,7 @@ where
     }
 }
 
-struct ParallelIterator<T, R, I, F>
+struct ParallelMap<T, R, I, F>
 where
     I: Iterator<Item = T>,
 {
@@ -190,7 +226,7 @@ where
     next_receiver: Cycle<Range<usize>>,
 }
 
-impl<T, R, I, F> ParallelIterator<T, R, I, F>
+impl<T, R, I, F> ParallelMap<T, R, I, F>
 where
     F: Fn(T) -> R + Send + Sync + Clone + 'static,
     I: Iterator<Item = T>,
@@ -235,6 +271,7 @@ where
 
         let tx = self.senders[idx].clone();
         let f = self.f.clone();
+        // TODO it would be best to pass in a scope here so we can propagate panics.
         rayon::spawn_fifo(move || {
             let r = f(next_input);
             tx.send(r);
@@ -242,7 +279,7 @@ where
     }
 }
 
-impl<T, R, I, F> Iterator for ParallelIterator<T, R, I, F>
+impl<T, R, I, F> Iterator for ParallelMap<T, R, I, F>
 where
     F: Fn(T) -> R + Send + Sync + Clone + 'static,
     I: Iterator<Item = T>,
@@ -273,7 +310,7 @@ where
     I: Iterator<Item = T>,
 {
     // Guarantees the same order
-    fn par_map(self, max_parallel: usize, f: F) -> ParallelIterator<T, R, I, F>;
+    fn par_map(self, max_parallel: usize, f: F) -> ParallelMap<T, R, I, F>;
 }
 
 impl<T, R, I, F> IteratorExt<T, R, I, F> for I
@@ -283,7 +320,7 @@ where
     T: Send + 'static,
     R: Send + 'static,
 {
-    fn par_map(self, max_parallel: usize, f: F) -> ParallelIterator<T, R, I, F> {
-        ParallelIterator::new(self, max_parallel, f)
+    fn par_map(self, max_parallel: usize, f: F) -> ParallelMap<T, R, I, F> {
+        ParallelMap::new(self, max_parallel, f)
     }
 }
