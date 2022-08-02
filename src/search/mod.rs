@@ -49,12 +49,30 @@ pub fn search_regex(
 
     match extracted {
         ExtractedRegexLiterals::None => {
-            return Ok(Box::new(ParallelDocChecker::new(
-                doc_ids,
-                s.docs(),
-                doc_ends,
-                re,
-            )));
+            let docs = Arc::new(s.docs());
+            let re = Arc::new(re);
+            let doc_ends = Arc::new(doc_ends);
+            Ok(Box::new(
+                doc_ids
+                    .par_map(128, move |doc_id| -> Result<DocMatch, Error> {
+                        let content = docs.read_content(doc_id, &doc_ends)?;
+                        let matched_ranges: Vec<Range<u32>> = re
+                            .find_iter(&content)
+                            .map(|m| m.start() as u32..m.end() as u32)
+                            .collect();
+
+                        Ok(DocMatch {
+                            id: doc_id,
+                            matches: matched_ranges,
+                            content,
+                        })
+                    })
+                    // TODO would a par_filter_map be more efficient here?
+                    .filter(|res| match res {
+                        Ok(doc_match) => doc_match.matches.len() > 0,
+                        Err(_) => true,
+                    }),
+            ))
         }
         ExtractedRegexLiterals::Exact(set) => {
             todo!()
@@ -115,38 +133,40 @@ where
     }
 }
 
-struct ParallelDocChecker<T> {
-    doc_ids: T,
-    docs: Arc<CachedDocs>,
-    doc_ends: Arc<DocEnds>,
-    re: Arc<Regex>,
-    senders: Vec<Sender<Result<DocMatch, Error>>>,
-    receivers: Vec<Receiver<Result<DocMatch, Error>>>,
+struct ParallelIterator<T, R, I, F>
+where
+    I: Iterator<Item = T>,
+{
+    f: F,
+    input: I,
+    senders: Vec<Sender<R>>,
+    receivers: Vec<Receiver<R>>,
     next_receiver: Cycle<Range<usize>>,
 }
 
-impl<T> ParallelDocChecker<T>
+impl<T, R, I, F> ParallelIterator<T, R, I, F>
 where
-    T: Iterator<Item = DocID>,
+    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    I: Iterator<Item = T>,
+    T: Send + 'static,
+    R: Send + 'static,
 {
-    const QUEUE_SIZE: usize = 128;
-
-    fn new(doc_ids: T, docs: CachedDocs, doc_ends: Arc<DocEnds>, re: Regex) -> Self {
+    fn new(input: I, max_parallel: usize, f: F) -> Self {
         Self {
-            doc_ids,
-            docs: Arc::new(docs),
-            doc_ends,
-            re: Arc::new(re),
-            senders: Vec::new(),
-            receivers: Vec::new(),
-            next_receiver: (0..Self::QUEUE_SIZE).cycle(),
+            f,
+            input,
+            senders: Vec::with_capacity(max_parallel),
+            receivers: Vec::with_capacity(max_parallel),
+            next_receiver: (0..max_parallel).cycle(),
         }
     }
 
-    fn init(&mut self) {
-        self.senders = Vec::with_capacity(Self::QUEUE_SIZE);
-        self.receivers = Vec::with_capacity(Self::QUEUE_SIZE);
-        for i in 0..Self::QUEUE_SIZE {
+    fn start_once(&mut self) {
+        if self.senders.len() != 0 {
+            return;
+        }
+
+        for i in 0..self.senders.capacity() {
             let (tx, rx) = bounded(1);
             self.receivers.push(rx);
             self.senders.push(tx);
@@ -155,70 +175,68 @@ where
     }
 
     fn spawn_task(&mut self, idx: usize) {
-        let doc_id = match self.doc_ids.next() {
-            Some(id) => id,
+        let next_input = match self.input.next() {
+            Some(n) => n,
             None => {
-                let (tx, rx) = bounded(1);
+                // Kinda hacky: replace the sender at the current
+                // index in order to drop the one that was previously
+                // there, closing the channel.
+                let (tx, _) = bounded(1);
                 self.senders[idx] = tx;
                 return;
             }
         };
 
-        let docs = self.docs.clone();
-        let doc_ends = self.doc_ends.clone();
-        let re = self.re.clone();
         let tx = self.senders[idx].clone();
-
+        let f = self.f.clone();
         rayon::spawn_fifo(move || {
-            let res = Self::search_doc(docs, doc_ends, doc_id, re);
-            tx.send(res);
+            let r = f(next_input);
+            tx.send(r);
         });
-    }
-
-    fn search_doc(
-        docs: Arc<CachedDocs>,
-        doc_ends: Arc<DocEnds>,
-        doc_id: DocID,
-        re: Arc<Regex>,
-    ) -> Result<DocMatch, Error> {
-        let content = docs.read_content(doc_id, &doc_ends)?;
-        let matched_ranges: Vec<Range<u32>> = re
-            .find_iter(&content)
-            .map(|m| m.start() as u32..m.end() as u32)
-            .collect();
-
-        Ok(DocMatch {
-            id: doc_id,
-            matches: matched_ranges,
-            content,
-        })
     }
 }
 
-impl<T> Iterator for ParallelDocChecker<T>
+impl<T, R, I, F> Iterator for ParallelIterator<T, R, I, F>
 where
-    T: Iterator<Item = DocID>,
+    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    I: Iterator<Item = T>,
+    T: Send + 'static,
+    R: Send + 'static,
 {
-    type Item = Result<DocMatch, Error>;
+    type Item = R;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.senders.len() == 0 {
-            self.init();
-        }
+        self.start_once();
 
         loop {
             let idx = self.next_receiver.next().unwrap();
             let rx = self.receivers[idx].clone();
             match rx.recv() {
                 Err(RecvError) => return None,
-                Ok(e @ Err(_)) => return Some(e),
-                Ok(Ok(doc_match)) => {
+                Ok(r) => {
                     self.spawn_task(idx);
-                    if doc_match.matches.len() > 0 {
-                        return Some(Ok(doc_match));
-                    }
+                    return Some(r);
                 }
             }
         }
+    }
+}
+
+trait IteratorExt<T, R, I, F>
+where
+    I: Iterator<Item = T>,
+{
+    fn par_map(self, max_parallel: usize, f: F) -> ParallelIterator<T, R, I, F>;
+}
+
+impl<T, R, I, F> IteratorExt<T, R, I, F> for I
+where
+    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    I: Iterator<Item = T>,
+    T: Send + 'static,
+    R: Send + 'static,
+{
+    fn par_map(self, max_parallel: usize, f: F) -> ParallelIterator<T, R, I, F> {
+        ParallelIterator::new(self, max_parallel, f)
     }
 }
