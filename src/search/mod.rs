@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use ::regex::bytes::Regex;
 
-use crate::shard::cached::{CachedDocs, CachedShard};
+use crate::shard::cached::{CachedDocs, CachedShard, CachedSuffixes};
+use crate::shard::content::ContentIdx;
+use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
 use crate::shard::{
     docs::{CompressedDocEnds, DocEnds, DocID, DocStore},
     Shard,
@@ -80,6 +82,50 @@ pub fn search_regex(
         ExtractedRegexLiterals::Inexact(all) => {
             todo!()
         }
+    }
+}
+
+struct ContentIdxPageIterator {
+    block_range: Range<(SuffixBlockID, usize)>,
+    next_block_id: SuffixBlockID,
+    suffixes: CachedSuffixes,
+    current_block: Option<Arc<SuffixBlock>>,
+}
+
+impl ContentIdxPageIterator {
+    fn new(suffix_range: Range<SuffixIdx>, suffixes: CachedSuffixes) -> Self {
+        let block_range = CachedSuffixes::block_range(suffix_range);
+        Self {
+            next_block_id: block_range.start.0,
+            block_range,
+            suffixes,
+            current_block: None,
+        }
+    }
+
+    fn next(&mut self) -> Option<Result<&[ContentIdx], Error>> {
+        if self.next_block_id > self.block_range.end.0 {
+            return None;
+        }
+
+        let block_id = self.next_block_id;
+        self.next_block_id += SuffixBlockID(1);
+        self.current_block = Some(match self.suffixes.read_block(self.next_block_id) {
+            Ok(b) => b,
+            Err(e) => return Some(Err(e.into())),
+        });
+
+        let is_first_block = block_id == self.block_range.start.0;
+        let is_last_block = block_id == self.block_range.end.0;
+
+        let block_ref = &self.current_block.as_ref().unwrap().0;
+        let slice = match (is_first_block, is_last_block) {
+            (true, true) => &block_ref[self.block_range.start.1..self.block_range.end.1],
+            (true, false) => &block_ref[self.block_range.start.1..],
+            (false, true) => &block_ref[..self.block_range.end.1],
+            (false, false) => &block_ref[..],
+        };
+        Some(Ok(slice))
     }
 }
 
@@ -226,6 +272,7 @@ trait IteratorExt<T, R, I, F>
 where
     I: Iterator<Item = T>,
 {
+    // Guarantees the same order
     fn par_map(self, max_parallel: usize, f: F) -> ParallelIterator<T, R, I, F>;
 }
 

@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, ops::Range, sync::Arc};
 
 use crate::cache::{Cache, CacheKey, CacheValue};
 
@@ -90,7 +90,7 @@ impl CachedDocs {
     }
 }
 
-struct CachedSuffixes {
+pub struct CachedSuffixes {
     shard_id: ShardID,
     suffixes: SuffixArrayStore,
     content: ContentStore,
@@ -112,7 +112,11 @@ impl CachedSuffixes {
         }
     }
 
-    pub fn block_id_for_suffix(suffix: SuffixIdx) -> SuffixBlockID {
+    pub fn block_range(suffix_range: Range<SuffixIdx>) -> Range<(SuffixBlockID, usize)> {
+        SuffixArrayStore::block_range(suffix_range)
+    }
+
+    pub fn block_id_for_suffix(suffix: SuffixIdx) -> (SuffixBlockID, usize) {
         SuffixArrayStore::block_id_for_suffix(suffix)
     }
 

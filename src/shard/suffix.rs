@@ -13,11 +13,11 @@ use super::content::{ContentIdx, ContentStore};
 #[derive(Copy, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixIdx(pub u32);
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(Copy, Clone, Add, AddAssign, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct SuffixBlockID(pub u32);
 
 #[derive(Debug)]
-pub struct SuffixBlock([ContentIdx; Self::SIZE_SUFFIXES]);
+pub struct SuffixBlock(pub [ContentIdx; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
     pub const SIZE_SUFFIXES: usize = 2048;
@@ -68,9 +68,24 @@ impl SuffixArrayStore {
         }
     }
 
+    pub fn block_range(suffix_range: Range<SuffixIdx>) -> Range<(SuffixBlockID, usize)> {
+        let start = Self::block_id_for_suffix(suffix_range.start);
+        let end = if u32::from(suffix_range.end) % SuffixBlock::SIZE_SUFFIXES as u32 == 0 {
+            let (id, offset) = Self::block_id_for_suffix(suffix_range.end);
+            (id, SuffixBlock::SIZE_SUFFIXES)
+        } else {
+            Self::block_id_for_suffix(suffix_range.end)
+        };
+        start..end
+    }
+
     // Returns the block ID for the block that contains the given suffix
-    pub fn block_id_for_suffix(suffix: SuffixIdx) -> SuffixBlockID {
-        SuffixBlockID(u32::from(suffix) / SuffixBlock::SIZE_SUFFIXES as u32)
+    pub fn block_id_for_suffix(suffix: SuffixIdx) -> (SuffixBlockID, usize) {
+        let SuffixIdx(suffix) = suffix;
+        (
+            SuffixBlockID(suffix / SuffixBlock::SIZE_SUFFIXES as u32),
+            suffix as usize % SuffixBlock::SIZE_SUFFIXES,
+        )
     }
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Box<SuffixBlock>, io::Error> {
