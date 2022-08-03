@@ -183,8 +183,8 @@ impl CompressedTrigramPointers {
         T: AsRef<[u8]>,
     {
         let idx = match needle.as_ref() {
-            [a, b, c, ..] => usize::from(*a) << 16 + usize::from(*b) << 8 + usize::from(*c),
-            [a, b] => usize::from(*a) << 16 + usize::from(*b) << 8,
+            [a, b, c, ..] => (usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c),
+            [a, b] => (usize::from(*a) << 16) + (usize::from(*b) << 8),
             [a] => usize::from(*a) << 16,
             [] => 0,
         };
@@ -198,10 +198,9 @@ impl CompressedTrigramPointers {
     {
         // TODO audit these saturating adds carefully at the boundary conditions
         let idx = match needle.as_ref() {
-            [a, b, c, ..] => {
-                (usize::from(*a) << 16 + usize::from(*b) << 8 + usize::from(*c)).saturating_add(1)
-            }
-            [a, b] => (usize::from(*a) << 8 + usize::from(*b)).saturating_add(1) << 8,
+            [a, b, c, ..] => ((usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c))
+                .saturating_add(1),
+            [a, b] => ((usize::from(*a) << 8) + usize::from(*b)).saturating_add(1) << 8,
             [a] => usize::from(*a).saturating_add(1) << 16,
             [] => self.0.len(),
         };

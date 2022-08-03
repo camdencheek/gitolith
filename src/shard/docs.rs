@@ -1,5 +1,5 @@
 use super::content::{ContentIdx, ContentStore};
-use derive_more::{Add, From, Into, Mul, Sub};
+use derive_more::{Add, AddAssign, From, Into, Mul, Sub};
 use std::fs::File;
 use std::io;
 use std::ops::Range;
@@ -7,9 +7,12 @@ use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 use sucds::elias_fano::EliasFano;
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(
+    Copy, Clone, AddAssign, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash,
+)]
 pub struct DocID(pub u32);
 
+// TODO create a macro that derives iterators for all the range types
 #[derive(Copy, Clone, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash)]
 #[mul(forward)]
 pub struct DocOffset(pub u32);
@@ -17,6 +20,16 @@ pub struct DocOffset(pub u32);
 impl From<DocID> for usize {
     fn from(doc_id: DocID) -> Self {
         doc_id.0 as usize
+    }
+}
+
+impl DocID {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    pub fn into_iter(range: Range<DocID>) -> impl ExactSizeIterator<Item = DocID> {
+        (range.start.0 as u32..range.end.0 as u32).map(|i| DocID(i))
     }
 }
 
@@ -128,6 +141,10 @@ impl DocEnds {
             .unwrap()
             .enable_rank(),
         )
+    }
+
+    pub fn max_doc_id(&self) -> DocID {
+        DocID(self.0.len() as u32 - 1)
     }
 }
 

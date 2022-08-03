@@ -84,8 +84,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         // let mut buf = std::io::BufWriter::new(handle);
 
         let mut count = 0;
-        for doc_match in search_regex(&cs, &args.query, args.skip_index)? {
-            let doc_match = doc_match?;
+        for doc_match in search_regex(cs.clone(), &args.query, args.skip_index)? {
             // if !args.count_only {
             //     buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
             // }

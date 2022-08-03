@@ -4,7 +4,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::cache::{Cache, CacheKey, CacheValue};
+use crate::{
+    cache::{Cache, CacheKey, CacheValue},
+    search::regex::PrefixRangeSet,
+};
 
 use super::{
     content::{ContentIdx, ContentStore},
@@ -101,6 +104,7 @@ impl CachedDocs {
     }
 }
 
+#[derive(Clone)]
 pub struct CachedSuffixes {
     shard_id: ShardID,
     suffixes: SuffixArrayStore,
@@ -131,7 +135,18 @@ impl CachedSuffixes {
         SuffixArrayStore::block_id_for_suffix(suffix)
     }
 
-    pub fn lookup_prefix_range(&self, prefix_range: RangeInclusive<Vec<u8>>) -> Range<SuffixIdx> {
+    pub fn max_block_id(&self) -> SuffixBlockID {
+        self.suffixes.max_block_id()
+    }
+
+    pub fn iter_blocks(&self, range: Option<RangeInclusive<SuffixBlockID>>) -> SuffixBlockIterator {
+        SuffixBlockIterator::new(self.clone(), range)
+    }
+
+    pub fn lookup_prefix_range<T>(&self, prefix_range: RangeInclusive<T>) -> Range<SuffixIdx>
+    where
+        T: AsRef<[u8]>,
+    {
         let trigrams = self.read_trigram_pointers();
         let start_bounds = trigrams.bounds(prefix_range.start()..=prefix_range.start());
         let end_bounds = trigrams.bounds(prefix_range.end()..=prefix_range.end());
@@ -144,7 +159,10 @@ impl CachedSuffixes {
         self.lookup_prefix_start(start, start_bounds)..self.lookup_prefix_end(end, end_bounds)
     }
 
-    fn lookup_prefix_start(&self, prefix: Vec<u8>, bounds: Range<SuffixIdx>) -> SuffixIdx {
+    fn lookup_prefix_start<T>(&self, prefix: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    where
+        T: AsRef<[u8]>,
+    {
         let doc_ends = self.docs.read_doc_ends();
         let pred = |suffix_idx| {
             // TODO we can probably improve perf here by holding onto the last block or two
@@ -154,10 +172,10 @@ impl CachedSuffixes {
             let doc_id = doc_ends.find(content_idx);
             let doc_content = self.docs.read_content(doc_id, &doc_ends);
             let doc_content_range = doc_ends.content_range(doc_id);
-            let content_end =
-                usize::from(doc_content_range.end).max(usize::from(content_idx) + prefix.len());
+            let prefix_slice: &[u8] = prefix.as_ref();
+            let content_end = usize::from(doc_content_range.end)
+                .max(usize::from(content_idx) + prefix_slice.len());
             let content = &doc_content[usize::from(content_idx)..content_end];
-            let prefix_slice: &[u8] = &prefix;
             // TODO up until here, all the logic is the same as lookup_prefix_end.
             // We can probably both deduplicate and run the lookups at the same time
             // to avoid the cost of re-fetching the blocks and content
@@ -166,7 +184,10 @@ impl CachedSuffixes {
         self.find_suffix_idx(pred, Some(bounds))
     }
 
-    fn lookup_prefix_end(&self, prefix: Vec<u8>, bounds: Range<SuffixIdx>) -> SuffixIdx {
+    fn lookup_prefix_end<T>(&self, prefix: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    where
+        T: AsRef<[u8]>,
+    {
         let doc_ends = self.docs.read_doc_ends();
         let pred = |suffix_idx| {
             // TODO we can probably improve perf here by holding onto the last block or two
@@ -176,10 +197,10 @@ impl CachedSuffixes {
             let doc_id = doc_ends.find(content_idx);
             let doc_content = self.docs.read_content(doc_id, &doc_ends);
             let doc_content_range = doc_ends.content_range(doc_id);
-            let content_end =
-                usize::from(doc_content_range.end).max(usize::from(content_idx) + prefix.len());
+            let prefix_slice: &[u8] = prefix.as_ref();
+            let content_end = usize::from(doc_content_range.end)
+                .max(usize::from(content_idx) + prefix_slice.len());
             let content = &doc_content[usize::from(content_idx)..content_end];
-            let prefix_slice: &[u8] = &prefix;
             // TODO up until here, all the logic is the same as lookup_prefix_end.
             // We can probably both deduplicate and run the lookups at the same time
             // to avoid the cost of re-fetching the blocks and content
@@ -237,6 +258,77 @@ impl CachedSuffixes {
         match value {
             CacheValue::TrigramPointers(tp) => tp,
             _ => unimplemented!(),
+        }
+    }
+}
+
+pub struct SuffixRangeIterator {
+    states: <Range<usize> as IntoIterator>::IntoIter,
+    range_set: PrefixRangeSet,
+    suffixes: CachedSuffixes,
+    start_buf: Vec<u8>,
+    end_buf: Vec<u8>,
+}
+
+impl SuffixRangeIterator {
+    pub fn new(range_set: PrefixRangeSet, suffixes: CachedSuffixes) -> Self {
+        Self {
+            states: (0..range_set.len()).into_iter(),
+            range_set,
+            suffixes,
+            start_buf: Vec::new(),
+            end_buf: Vec::new(),
+        }
+    }
+}
+
+impl Iterator for SuffixRangeIterator {
+    type Item = Range<SuffixIdx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let state = self.states.next()?;
+        self.start_buf.clear();
+        self.end_buf.clear();
+        self.range_set
+            .write_state_to(state, &mut self.start_buf, &mut self.end_buf);
+
+        Some(
+            self.suffixes
+                .lookup_prefix_range(&self.start_buf..=&self.end_buf),
+        )
+    }
+}
+
+pub struct SuffixBlockIterator {
+    last_id: SuffixBlockID,
+    next_id: SuffixBlockID,
+    suffixes: CachedSuffixes,
+}
+
+impl SuffixBlockIterator {
+    fn new(suffixes: CachedSuffixes, range: Option<RangeInclusive<SuffixBlockID>>) -> Self {
+        let range = match range {
+            Some(r) => r,
+            None => SuffixBlockID(0)..=suffixes.max_block_id(),
+        };
+        Self {
+            suffixes,
+            next_id: *range.start(),
+            last_id: *range.end(),
+        }
+    }
+}
+
+impl Iterator for SuffixBlockIterator {
+    type Item = (SuffixBlockID, Arc<SuffixBlock>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next_id = self.next_id;
+        self.next_id += SuffixBlockID(1);
+        if next_id > self.last_id {
+            None
+        } else {
+            Some((next_id, self.suffixes.read_block(next_id)))
         }
     }
 }
