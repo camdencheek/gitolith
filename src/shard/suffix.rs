@@ -1,5 +1,5 @@
 use anyhow::Error;
-use derive_more::{Add, AddAssign, From, Into, Sub};
+use derive_more::{Add, AddAssign, Div, From, Into, Mul, Sub};
 use std::fs::File;
 use std::io::{self, Read};
 use std::ops::{Range, RangeInclusive};
@@ -10,10 +10,14 @@ use sucds::{EliasFanoBuilder, Searial};
 
 use super::content::{ContentIdx, ContentStore};
 
-#[derive(Copy, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(
+    Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
+)]
 pub struct SuffixIdx(pub u32);
 
-#[derive(Copy, Clone, Add, AddAssign, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(
+    Copy, Div, Mul, Clone, Add, AddAssign, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
+)]
 pub struct SuffixBlockID(pub u32);
 
 #[derive(Debug)]
@@ -42,7 +46,8 @@ pub struct SuffixArrayStore {
     // Pointer to the suffix array relative to the start of the file
     sa_ptr: u64,
     // Length in u32s, not bytes
-    sa_len: u32,
+    // TODO this should not be public
+    pub sa_len: u32,
     trigrams_ptr: u64,
     trigrams_len: u64,
 }
@@ -65,6 +70,14 @@ impl SuffixArrayStore {
             sa_len,
             trigrams_ptr,
             trigrams_len,
+        }
+    }
+
+    pub fn max_block_id(&self) -> SuffixBlockID {
+        if self.sa_len % SuffixBlock::SIZE_SUFFIXES as u32 == 0 {
+            SuffixBlockID(self.sa_len / SuffixBlock::SIZE_SUFFIXES as u32)
+        } else {
+            SuffixBlockID(self.sa_len / SuffixBlock::SIZE_SUFFIXES as u32 + 1)
         }
     }
 

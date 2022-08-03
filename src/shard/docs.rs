@@ -1,5 +1,5 @@
 use super::content::{ContentIdx, ContentStore};
-use derive_more::{Add, From, Into, Sub};
+use derive_more::{Add, From, Into, Mul, Sub};
 use std::fs::File;
 use std::io;
 use std::ops::Range;
@@ -7,8 +7,12 @@ use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 use sucds::elias_fano::EliasFano;
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(Copy, Clone, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash)]
 pub struct DocID(pub u32);
+
+#[derive(Copy, Clone, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[mul(forward)]
+pub struct DocOffset(pub u32);
 
 impl From<DocID> for usize {
     fn from(doc_id: DocID) -> Self {
@@ -88,19 +92,28 @@ impl DocEnds {
     }
 
     // Returns the id of the document that contains the given content offset.
-    pub fn container(&self, offset: &ContentIdx) -> DocID {
-        let id = self.0.partition_point(|end| offset > end);
-        DocID(id as u32)
+    pub fn find(&self, offset: ContentIdx) -> DocID {
+        DocID(self.0.partition_point(|end| &offset > end) as u32)
     }
 
     // Returns the range (relative to the beginning of the content block) that
     // represents the content of the document with the given id.
     pub fn content_range(&self, id: DocID) -> Range<ContentIdx> {
-        if id == DocID(0) {
-            ContentIdx(0)..self.0[0]
+        self.doc_start(id)..self.doc_end(id)
+    }
+
+    #[inline]
+    pub fn doc_start(&self, doc: DocID) -> ContentIdx {
+        if doc == DocID(0) {
+            ContentIdx(0)
         } else {
-            self.0[usize::from(id) - 1] + ContentIdx(1)..self.0[u32::from(id) as usize]
+            self.0[usize::from(doc) - 1]
         }
+    }
+
+    #[inline]
+    pub fn doc_end(&self, doc: DocID) -> ContentIdx {
+        self.0[usize::from(doc)]
     }
 
     pub fn compress(&self) -> CompressedDocEnds {
@@ -171,7 +184,7 @@ mod test {
         ];
 
         for (content_idx, doc_id) in tests {
-            assert_eq!(doc_ends.container(&content_idx), doc_id);
+            assert_eq!(doc_ends.find(content_idx), doc_id);
             assert_eq!(compressed.container(content_idx), doc_id);
         }
     }

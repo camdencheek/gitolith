@@ -47,7 +47,7 @@ pub fn search_regex(
     };
     // TODO optimize extracted
     //
-    let doc_ends = s.docs().read_doc_ends()?;
+    let doc_ends = s.docs().read_doc_ends();
     let doc_ids = s.docs().doc_ids();
     let suffixes = s.suffixes();
 
@@ -59,7 +59,7 @@ pub fn search_regex(
             Ok(Box::new(
                 doc_ids
                     .par_map(128, move |doc_id| -> Result<DocMatch, Error> {
-                        let content = docs.read_content(doc_id, &doc_ends)?;
+                        let content = docs.read_content(doc_id, &doc_ends);
                         let matched_ranges: Vec<Range<u32>> = re
                             .find_iter(&content)
                             .map(|m| m.start() as u32..m.end() as u32)
@@ -93,7 +93,6 @@ pub fn search_regex(
         //             start.clear();
         //             end.clear();
         //             prefix_set.write_state_to(i, &mut start, &mut end);
-
         //         }
         //     },
         // ))),
@@ -131,10 +130,7 @@ impl ContentIdxPageIterator {
 
         let block_id = self.next_block_id;
         self.next_block_id += SuffixBlockID(1);
-        self.current_block = Some(match self.suffixes.read_block(self.next_block_id) {
-            Ok(b) => b,
-            Err(e) => return Some(Err(e.into())),
-        });
+        self.current_block = Some(self.suffixes.read_block(self.next_block_id));
 
         let is_first_block = block_id == self.block_range.start.0;
         let is_last_block = block_id == self.block_range.end.0;
@@ -178,11 +174,7 @@ where
         // Loop until we find a doc with matches
         loop {
             let doc_id = self.doc_ids.next()?;
-            let content = match self.docs.read_content(doc_id, &self.doc_ends) {
-                Err(e) => return Some(Err(e.into())),
-                Ok(content) => content,
-            };
-
+            let content = self.docs.read_content(doc_id, &self.doc_ends);
             let matched_ranges: Vec<Range<u32>> = self
                 .re
                 .find_iter(&content)
