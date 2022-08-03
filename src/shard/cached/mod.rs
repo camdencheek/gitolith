@@ -27,6 +27,10 @@ impl CachedShard {
     pub fn docs(&self) -> CachedDocs {
         CachedDocs::new(self.id, self.shard.docs.clone(), self.cache.clone())
     }
+
+    pub fn suffixes(&self) -> CachedSuffixes {
+        CachedSuffixes::new(self.id, self.shard.suffixes.clone(), self.cache.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -93,21 +97,14 @@ impl CachedDocs {
 pub struct CachedSuffixes {
     shard_id: ShardID,
     suffixes: SuffixArrayStore,
-    content: ContentStore,
     cache: Cache,
 }
 
 impl CachedSuffixes {
-    pub fn new(
-        shard_id: ShardID,
-        suffixes: SuffixArrayStore,
-        content: ContentStore,
-        cache: Cache,
-    ) -> Self {
+    pub fn new(shard_id: ShardID, suffixes: SuffixArrayStore, cache: Cache) -> Self {
         Self {
             shard_id,
             suffixes,
-            content,
             cache,
         }
     }

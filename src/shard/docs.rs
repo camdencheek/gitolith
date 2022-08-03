@@ -88,8 +88,8 @@ impl DocEnds {
     }
 
     // Returns the id of the document that contains the given content offset.
-    pub fn container(&self, offset: ContentIdx) -> DocID {
-        let id = self.0.partition_point(|end| offset > *end);
+    pub fn container(&self, offset: &ContentIdx) -> DocID {
+        let id = self.0.partition_point(|end| offset > end);
         DocID(id as u32)
     }
 
@@ -171,7 +171,7 @@ mod test {
         ];
 
         for (content_idx, doc_id) in tests {
-            assert_eq!(doc_ends.container(content_idx), doc_id);
+            assert_eq!(doc_ends.container(&content_idx), doc_id);
             assert_eq!(compressed.container(content_idx), doc_id);
         }
     }

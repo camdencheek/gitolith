@@ -49,6 +49,7 @@ pub fn search_regex(
     //
     let doc_ends = s.docs().read_doc_ends()?;
     let doc_ids = s.docs().doc_ids();
+    let suffixes = s.suffixes();
 
     match extracted {
         ExtractedRegexLiterals::None => {
@@ -83,37 +84,21 @@ pub fn search_regex(
         ExtractedRegexLiterals::Inexact(all) => {
             todo!()
         }
+        // ExtractedRegexLiterals::Inexact(all) => Ok(Box::new(all.iter().map(
+        //     |prefix_set| -> Result<BitVec, Error> {
+        //         let mut start = Vec::new();
+        //         let mut end = Vec::new();
+
+        //         for i in prefix_set.len() {
+        //             start.clear();
+        //             end.clear();
+        //             prefix_set.write_state_to(i, &mut start, &mut end);
+
+        //         }
+        //     },
+        // ))),
     }
 }
-
-// struct InexactDocIterator {
-//     candidate_docs: BitVec,
-//     remaining_candidate_docs: usize,
-//     page_iters: Vec<ContentIdxPageIterator>,
-//     doc_ends: Arc<DocEnds>,
-// }
-
-// impl InexactDocIterator {
-//     fn new(
-//         mut page_iters: Vec<ContentIdxPageIterator>,
-//         docs: CachedDocs,
-//         doc_ends: Arc<DocEnds>,
-//     ) -> Self {
-//         // Sort by smallest first to filter out as many docs as possible
-//         page_iters.sort_by_key(ContentIdxPageIterator::len_total);
-
-//         Self {
-//             page_iters,
-//             doc_ends,
-//             candidate_docs: bitvec::bitvec![1; docs.num_docs() as usize],
-//             remaining_candidate_docs: docs.num_docs() as usize,
-//         }
-//     }
-// }
-
-// impl Iterator for InexactDocIterator {
-//     type Item = Result<DocID,
-// }
 
 struct ContentIdxPageIterator {
     block_range: Range<(SuffixBlockID, usize)>,
