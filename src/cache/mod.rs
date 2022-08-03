@@ -1,12 +1,12 @@
-use moka::sync::{Cache as MokaCache, CacheBuilder};
-
-use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID};
-
-use super::shard::docs::{CompressedDocEnds, DocEnds, DocID};
-use super::shard::ShardID;
 use std::sync::Arc;
 
-pub type Cache = MokaCache<CacheKey, CacheValue>;
+use crate::shard::docs::{CompressedDocEnds, DocEnds, DocID};
+use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID};
+use crate::shard::ShardID;
+
+use stretto::{Cache as StrettoCache, Coster, DefaultKeyBuilder};
+
+pub type Cache = StrettoCache<CacheKey, CacheValue, DefaultKeyBuilder<CacheKey>, CacheValueCoster>;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 pub enum CacheKey {
@@ -25,19 +25,30 @@ pub enum CacheValue {
 }
 
 impl CacheValue {
-    fn size(&self) -> u32 {
+    fn size(&self) -> i64 {
         match self {
-            CacheValue::DocEnds(e) => e.doc_count() as u32,
-            CacheValue::DocContent(c) => c.len() as u32,
-            CacheValue::SuffixBlock(_) => SuffixBlock::SIZE_BYTES as u32,
-            CacheValue::TrigramPointers(p) => p.size_in_bytes() as u32,
+            CacheValue::DocEnds(e) => e.doc_count() as i64,
+            CacheValue::DocContent(c) => c.len() as i64,
+            CacheValue::SuffixBlock(_) => SuffixBlock::SIZE_BYTES as i64,
+            CacheValue::TrigramPointers(p) => p.size_in_bytes() as i64,
         }
     }
 }
 
+pub struct CacheValueCoster();
+
+impl Coster for CacheValueCoster {
+    type Value = CacheValue;
+
+    fn cost(&self, val: &Self::Value) -> i64 {
+        val.size()
+    }
+}
+
 pub fn new_cache(max_capacity: u64) -> Cache {
-    MokaCache::builder()
-        .max_capacity(max_capacity)
-        .weigher(|_, v: &CacheValue| v.size())
-        .build()
+    // TODO tune num_counters
+    StrettoCache::builder(10_000, max_capacity as i64)
+        .set_coster(CacheValueCoster())
+        .finalize()
+        .unwrap()
 }

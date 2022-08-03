@@ -18,9 +18,10 @@ memmap2 = "0.5.5"
 derive_more = "0.99.17"
 sucds = "0.4.0"
 anyhow = "1.0.58"
-moka = "0.9.2"
+# moka = "0.9.2"
 crossbeam = {version = "0.8.2", features = ["crossbeam-channel"]}
 bitvec = "1.0.1"
+stretto = "0.6.2"
 
 [profile.release]
 debug = true

@@ -67,13 +67,17 @@ impl CachedDocs {
 
     pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Arc<Vec<u8>> {
         let key = CacheKey::DocContent(self.shard_id, doc_id);
-        let value = self.cache.get_with(key, || -> CacheValue {
-            CacheValue::DocContent(Arc::new(
+        let value = if let Some(v) = self.cache.get(&key) {
+            v.value().clone()
+        } else {
+            let v = CacheValue::DocContent(Arc::new(
                 self.docs
                     .read_content(doc_id, doc_ends)
                     .expect("failed to read doc content"),
-            ))
-        });
+            ));
+            self.cache.insert(key, v.clone(), 0);
+            v
+        };
 
         match value {
             CacheValue::DocContent(dc) => dc,
@@ -83,11 +87,15 @@ impl CachedDocs {
 
     pub fn read_doc_ends(&self) -> Arc<DocEnds> {
         let key = CacheKey::DocEnds(self.shard_id);
-        let value = self.cache.get_with(key, || -> CacheValue {
-            CacheValue::DocEnds(Arc::new(
+        let value = if let Some(v) = self.cache.get(&key) {
+            v.value().clone()
+        } else {
+            let v = CacheValue::DocEnds(Arc::new(
                 self.docs.read_doc_ends().expect("failed to read doc ends"),
-            ))
-        });
+            ));
+            self.cache.insert(key, v.clone(), 0);
+            v
+        };
 
         match value {
             CacheValue::DocEnds(de) => de,
@@ -242,13 +250,17 @@ impl CachedSuffixes {
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Arc<SuffixBlock> {
         let key = CacheKey::SuffixBlock(self.shard_id, block_id);
-        let value = self.cache.get_with(key, || -> CacheValue {
-            CacheValue::SuffixBlock(Arc::from(
+        let value = if let Some(v) = self.cache.get(&key) {
+            v.value().clone()
+        } else {
+            let v = CacheValue::SuffixBlock(Arc::from(
                 self.suffixes
                     .read_block(block_id)
                     .expect("failed to read suffix block"),
-            ))
-        });
+            ));
+            self.cache.insert(key, v.clone(), 0);
+            v
+        };
 
         match value {
             CacheValue::SuffixBlock(b) => b,
@@ -258,13 +270,17 @@ impl CachedSuffixes {
 
     pub fn read_trigram_pointers(&self) -> Arc<CompressedTrigramPointers> {
         let key = CacheKey::TrigramPointers(self.shard_id);
-        let value = self.cache.get_with(key, || -> CacheValue {
-            CacheValue::TrigramPointers(Arc::new(
+        let value = if let Some(v) = self.cache.get(&key) {
+            v.value().clone()
+        } else {
+            let v = CacheValue::TrigramPointers(Arc::new(
                 self.suffixes
                     .read_trigram_pointers()
                     .expect("failed to read trigram pointers"),
-            ))
-        });
+            ));
+            self.cache.insert(key, v.clone(), 0);
+            v
+        };
 
         match value {
             CacheValue::TrigramPointers(tp) => tp,
