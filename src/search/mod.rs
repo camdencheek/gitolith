@@ -104,7 +104,7 @@ pub fn search_regex(
                                     .flatten()
                             })
                             .collect()
-                    ).map(move |doc_id| -> DocMatch {
+                    ).par_map(32, move |doc_id| -> DocMatch {
                         let content = docs.read_content(doc_id, &doc_ends);
                         let matched_ranges: Vec<Range<u32>> = re
                             .find_iter(&content)

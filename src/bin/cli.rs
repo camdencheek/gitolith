@@ -3,20 +3,17 @@
 use anyhow::Error;
 use clap::{Parser, Subcommand};
 use regex::Regex;
-use search::search_regex;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use walkdir::WalkDir;
 
-mod cache;
-mod search;
-mod shard;
-
-use shard::builder::ShardBuilder;
-use shard::cached::CachedShard;
-use shard::{Shard, ShardID};
+use gitserver3::cache;
+use gitserver3::search::search_regex;
+use gitserver3::shard::builder::ShardBuilder;
+use gitserver3::shard::cached::CachedShard;
+use gitserver3::shard::{Shard, ShardID};
 
 #[derive(Parser, Debug)]
 pub struct Cli {
@@ -74,7 +71,7 @@ fn main() -> Result<(), Error> {
 
 fn search(args: SearchArgs) -> Result<(), Error> {
     let s = Shard::open(&args.shard)?;
-    let c = cache::new_cache(512 * 1024 * 1024); // 4 GiB
+    let c = cache::new_cache(4 * 1024 * 1024 * 1024); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
     for i in 0..args.repeat {
