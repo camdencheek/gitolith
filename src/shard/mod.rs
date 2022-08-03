@@ -95,7 +95,6 @@ impl ShardHeader {
         buf.write(&self.flags.to_le_bytes()).unwrap();
         buf.write(&self._padding.to_le_bytes()).unwrap();
         buf.write(&self.content_ptr.to_le_bytes()).unwrap();
-        dbg!(&self.content_ptr);
         buf.write(&self.content_len.to_le_bytes()).unwrap();
         buf.write(&self.doc_ends_ptr.to_le_bytes()).unwrap();
         buf.write(&self.doc_ends_len.to_le_bytes()).unwrap();

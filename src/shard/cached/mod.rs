@@ -181,14 +181,14 @@ impl CachedSuffixes {
             let doc_content_range = doc_ends.content_range(doc_id);
             let prefix_slice: &[u8] = prefix.as_ref();
             let content_end = usize::from(doc_content_range.end)
-                .max(usize::from(content_idx) + prefix_slice.len());
+                .min(usize::from(content_idx) + prefix_slice.len());
             let content = &doc_content[usize::from(content_idx)
                 - u32::from(doc_content_range.start) as usize
                 ..content_end - u32::from(doc_content_range.start) as usize];
             // TODO up until here, all the logic is the same as lookup_prefix_end.
             // We can probably both deduplicate and run the lookups at the same time
             // to avoid the cost of re-fetching the blocks and content
-            return prefix_slice < content;
+            return content < prefix_slice;
         };
         self.find_suffix_idx(pred, Some(bounds))
     }
@@ -208,14 +208,14 @@ impl CachedSuffixes {
             let doc_content_range = doc_ends.content_range(doc_id);
             let prefix_slice: &[u8] = prefix.as_ref();
             let content_end = usize::from(doc_content_range.end)
-                .max(usize::from(content_idx) + prefix_slice.len());
+                .min(usize::from(content_idx) + prefix_slice.len());
             let content = &doc_content[usize::from(content_idx)
                 - u32::from(doc_content_range.start) as usize
                 ..content_end - u32::from(doc_content_range.start) as usize];
             // TODO up until here, all the logic is the same as lookup_prefix_end.
             // We can probably both deduplicate and run the lookups at the same time
             // to avoid the cost of re-fetching the blocks and content
-            return prefix_slice <= content;
+            return content <= prefix_slice;
         };
         self.find_suffix_idx(pred, Some(bounds))
     }

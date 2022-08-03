@@ -134,17 +134,19 @@ impl TrigramPointers {
         for i in 0..content.len() {
             let suffix = &content[i..];
             let trigram_idx = match suffix {
-                [a, b, c, ..] => (usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c),
-                [a, b] => (usize::from(*a) << 16) + (usize::from(*b) << 8),
-                [a] => (usize::from(*a) << 16),
+                [a, b, c, ..] => u32::from_be_bytes([0, *a, *b, *c]),
+                [a, b] => u32::from_be_bytes([0, *a, *b, 0]),
+                [a] => u32::from_be_bytes([0, *a, 0, 0]),
                 _ => unreachable!("should not ever have an empty slice"),
             };
-            frequencies[trigram_idx] += SuffixIdx(1)
+            frequencies[trigram_idx as usize] += SuffixIdx(1)
         }
 
-        frequencies.iter_mut().fold(SuffixIdx(0), |acc, freq| {
-            *freq += acc;
-            *freq
+        // Calculate cumulative frequencies
+        frequencies.iter_mut().fold(SuffixIdx(0), |mut acc, freq| {
+            // Store the previous accumulator in freq
+            std::mem::swap(&mut acc, freq);
+            acc + *freq
         });
         let pointers = frequencies;
         Self(pointers)
@@ -183,12 +185,12 @@ impl CompressedTrigramPointers {
         T: AsRef<[u8]>,
     {
         let idx = match needle.as_ref() {
-            [a, b, c, ..] => (usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c),
-            [a, b] => (usize::from(*a) << 16) + (usize::from(*b) << 8),
-            [a] => usize::from(*a) << 16,
+            [a, b, c, ..] => u32::from_be_bytes([0, *a, *b, *c]),
+            [a, b] => u32::from_be_bytes([0, *a, *b, 0]),
+            [a] => u32::from_be_bytes([0, *a, 0, 0]),
             [] => 0,
         };
-        SuffixIdx(self.0.select(idx) as u32)
+        SuffixIdx(self.0.select(idx as usize) as u32)
     }
 
     // Returns an exclusive upper bound on the suffixes with the prefix needle
@@ -198,13 +200,12 @@ impl CompressedTrigramPointers {
     {
         // TODO audit these saturating adds carefully at the boundary conditions
         let idx = match needle.as_ref() {
-            [a, b, c, ..] => ((usize::from(*a) << 16) + (usize::from(*b) << 8) + usize::from(*c))
-                .saturating_add(1),
-            [a, b] => ((usize::from(*a) << 8) + usize::from(*b)).saturating_add(1) << 8,
-            [a] => usize::from(*a).saturating_add(1) << 16,
-            [] => self.0.len(),
+            [a, b, c, ..] => u32::from_be_bytes([0, *a, *b, *c]).saturating_add(1),
+            [a, b] => u32::from_be_bytes([0, 0, *a, *b]).saturating_add(1) << 8,
+            [a] => u32::from_be_bytes([0, 0, 0, *a]).saturating_add(1) << 16,
+            [] => self.0.len() as u32,
         };
-        SuffixIdx(self.0.select(idx) as u32)
+        SuffixIdx(self.0.select(idx as usize) as u32)
     }
 
     pub fn serialize_into<W: std::io::Write>(

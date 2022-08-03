@@ -36,5 +36,8 @@ impl CacheValue {
 }
 
 pub fn new_cache(max_capacity: u64) -> Cache {
-    CacheBuilder::new(max_capacity).build()
+    MokaCache::builder()
+        .max_capacity(max_capacity)
+        .weigher(|_, v: &CacheValue| v.size())
+        .build()
 }

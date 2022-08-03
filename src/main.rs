@@ -74,7 +74,7 @@ fn main() -> Result<(), Error> {
 
 fn search(args: SearchArgs) -> Result<(), Error> {
     let s = Shard::open(&args.shard)?;
-    let c = cache::new_cache(4 * 1024 * 1024 * 1024); // 4 GiB
+    let c = cache::new_cache(8 * 1024 * 1024 * 1024); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
     for i in 0..args.repeat {
