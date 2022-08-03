@@ -143,13 +143,20 @@ impl CachedSuffixes {
         SuffixBlockIterator::new(self.clone(), range)
     }
 
-    pub fn lookup_prefix_range<T>(&self, prefix_range: RangeInclusive<T>) -> Range<SuffixIdx>
+    pub fn lookup_prefix_range<T>(
+        &self,
+        trigrams: &Arc<CompressedTrigramPointers>,
+        prefix_range: RangeInclusive<T>,
+    ) -> Range<SuffixIdx>
     where
-        T: AsRef<[u8]>,
+        T: AsRef<[u8]> + Eq,
     {
-        let trigrams = self.read_trigram_pointers();
         let start_bounds = trigrams.bounds(prefix_range.start()..=prefix_range.start());
-        let end_bounds = trigrams.bounds(prefix_range.end()..=prefix_range.end());
+        let end_bounds = if prefix_range.start() == prefix_range.end() {
+            start_bounds.clone()
+        } else {
+            trigrams.bounds(prefix_range.end()..=prefix_range.end())
+        };
         if start_bounds.start == end_bounds.end {
             // Return early if there are no trigrams that match
             return start_bounds.start..end_bounds.end;
@@ -270,6 +277,7 @@ pub struct SuffixRangeIterator {
     states: <Range<usize> as IntoIterator>::IntoIter,
     range_set: PrefixRangeSet,
     suffixes: CachedSuffixes,
+    trigrams: Arc<CompressedTrigramPointers>,
     start_buf: Vec<u8>,
     end_buf: Vec<u8>,
 }
@@ -279,6 +287,7 @@ impl SuffixRangeIterator {
         Self {
             states: (0..range_set.len()).into_iter(),
             range_set,
+            trigrams: suffixes.read_trigram_pointers(),
             suffixes,
             start_buf: Vec::new(),
             end_buf: Vec::new(),
@@ -298,7 +307,7 @@ impl Iterator for SuffixRangeIterator {
 
         Some(
             self.suffixes
-                .lookup_prefix_range(&self.start_buf..=&self.end_buf),
+                .lookup_prefix_range(&self.trigrams, &self.start_buf..=&self.end_buf),
         )
     }
 }
