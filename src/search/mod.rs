@@ -104,7 +104,7 @@ pub fn search_regex(
                                     .flatten()
                             })
                             .collect()
-                    ).par_map(64, move |doc_id| -> DocMatch {
+                    ).map(move |doc_id| -> DocMatch {
                         let content = docs.read_content(doc_id, &doc_ends);
                         let matched_ranges: Vec<Range<u32>> = re
                             .find_iter(&content)
@@ -166,7 +166,9 @@ where
 
         let mut idx_iter = &mut self.content_idx_iters[iter_idx];
         while let Some(content_idx) = idx_iter.next() {
-            // TODO we can probably speed this up by hinting the starting range
+            // TODO we can theoretically speed this up by limiting the range
+            // of docs being considered to only consider docs > doc_id.
+            // I tried this and it didn't seem to make a difference.
             let idx_doc_id = self.doc_ends.find(content_idx);
             if idx_doc_id == doc_id {
                 return true;

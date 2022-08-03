@@ -25,7 +25,8 @@ crossbeam = {version = "0.8.2", features = ["crossbeam-channel"]}
 bitvec = "1.0.1"
 
 [profile.release]
-debug = true
+# debug = true
+lto = true
 
 [features]
 nightly = []

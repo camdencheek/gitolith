@@ -74,29 +74,29 @@ fn main() -> Result<(), Error> {
 
 fn search(args: SearchArgs) -> Result<(), Error> {
     let s = Shard::open(&args.shard)?;
-    let c = cache::new_cache(8 * 1024 * 1024 * 1024); // 4 GiB
+    let c = cache::new_cache(512 * 1024 * 1024); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
     for i in 0..args.repeat {
         let start = Instant::now();
 
-        // let handle = std::io::stdout().lock();
-        // let mut buf = std::io::BufWriter::new(handle);
+        let handle = std::io::stdout().lock();
+        let mut buf = std::io::BufWriter::new(handle);
 
         let mut count = 0;
         for doc_match in search_regex(cs.clone(), &args.query, args.skip_index)? {
-            // if !args.count_only {
-            //     buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
-            // }
+            if !args.count_only {
+                buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
+            }
             for r in doc_match.matches {
                 count += 1;
 
-                // if !args.count_only {
-                //     buf.write_fmt(format_args!(
-                //         "{}\n",
-                //         std::str::from_utf8(&doc_match.content[r.start as usize..r.end as usize])?,
-                //     ))?;
-                // }
+                if !args.count_only {
+                    buf.write_fmt(format_args!(
+                        "{}\n",
+                        std::str::from_utf8(&doc_match.content[r.start as usize..r.end as usize])?,
+                    ))?;
+                }
             }
         }
         // buf.flush()?;
