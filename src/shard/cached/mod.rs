@@ -211,9 +211,8 @@ impl CachedSuffixes {
     pub fn read_block(&self, block_id: SuffixBlockID) -> Arc<SuffixBlock> {
         let key = CacheKey::SuffixBlock(self.shard_id, block_id);
         let value = self.cache.get_with(key, || -> CacheValue {
-            CacheValue::SuffixBlock(Arc::new(
-                *self
-                    .suffixes
+            CacheValue::SuffixBlock(Arc::from(
+                self.suffixes
                     .read_block(block_id)
                     .expect("failed to read suffix block"),
             ))

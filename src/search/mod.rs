@@ -99,14 +99,14 @@ pub fn search_regex(
     }
 }
 
-struct ContentIdxPageIterator {
+struct ContentIdxIterator {
     block_range: Range<(SuffixBlockID, usize)>,
     next_block_id: SuffixBlockID,
     suffixes: CachedSuffixes,
     current_block: Option<Arc<SuffixBlock>>,
 }
 
-impl ContentIdxPageIterator {
+impl ContentIdxIterator {
     fn new(suffix_range: Range<SuffixIdx>, suffixes: CachedSuffixes) -> Self {
         let block_range = CachedSuffixes::block_range(suffix_range);
         Self {
@@ -123,7 +123,7 @@ impl ContentIdxPageIterator {
             + (self.block_range.end.1 - self.block_range.start.1)
     }
 
-    fn next(&mut self) -> Option<Result<&[ContentIdx], Error>> {
+    fn next(&mut self) -> Option<&[ContentIdx]> {
         if self.next_block_id > self.block_range.end.0 {
             return None;
         }
@@ -142,7 +142,7 @@ impl ContentIdxPageIterator {
             (false, true) => &block_ref[..self.block_range.end.1],
             (false, false) => &block_ref[..],
         };
-        Some(Ok(slice))
+        Some(slice)
     }
 }
 

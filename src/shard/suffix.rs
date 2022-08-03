@@ -34,7 +34,7 @@ impl SuffixBlock {
     fn as_bytes_mut(&mut self) -> &mut [u8] {
         // TODO guarantee this is actually safe. I _think_ a single-element tuple struct will
         // always have the same representation as its only element, but I'm not 100% sure.
-        // Maybe #[repr(C)] would help on ContentIdx
+        // Maybe #[repr(C)] on ContentIdx would make me feel better.
         unsafe { std::slice::from_raw_parts_mut(self.0.as_ptr() as *mut u8, Self::SIZE_BYTES) }
     }
 }
