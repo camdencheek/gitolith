@@ -49,11 +49,13 @@ pub fn search_regex(
     };
     // TODO optimize extracted
 
-    // TODO implement exact matching
     extracted = match extracted {
         ExtractedRegexLiterals::Exact(e) => ExtractedRegexLiterals::Inexact(vec![e]),
         _ => extracted,
     };
+    dbg!(&extracted);
+    extracted = extracted.optimize();
+    dbg!(&extracted);
 
     match extracted {
         ExtractedRegexLiterals::None => {
@@ -98,6 +100,7 @@ pub fn search_regex(
                             .map(|suf_range_iter| {
                                 let suffixes2 = s.suffixes();
                                 suf_range_iter
+                                    .filter(|suf_range| suf_range.start != suf_range.end)
                                     .map(move |suf_range| {
                                         ContentIdxIterator::new(suf_range, suffixes2.clone())
                                     })

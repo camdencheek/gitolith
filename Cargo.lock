@@ -62,6 +62,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytefmt"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "590b1af059a21c47d4da7cd11f05e08b1992b58b5b4acf2a5e10d7e53aed3d74"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -229,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitvec",
+ "bytefmt",
  "clap",
  "crossbeam",
  "derive_more",

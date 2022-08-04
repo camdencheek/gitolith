@@ -15,12 +15,44 @@ pub enum ExtractedRegexLiterals {
     // the prefixes from each of the iterators.
     //
     // As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
-    // Inexact(vec![[abc, abd], [efg, efh]])
+    // Inexact(vec![[abc..abd], [efg..efh]])
     Inexact(Vec<PrefixRangeSet>),
 
     // If no meaningful literals can be extracted from the regex pattern, like /.*/,
     // the result of extraction will be None.
     None,
+}
+
+impl ExtractedRegexLiterals {
+    pub fn optimize(self) -> ExtractedRegexLiterals {
+        // TODO tune this
+        let max_len = 128;
+        match self {
+            Self::Exact(pr) => {
+                if pr.len() <= max_len {
+                    Self::Exact(pr)
+                } else {
+                    Self::Inexact(pr.split_to_max_len(max_len))
+                }
+            }
+            Self::Inexact(prs) => {
+                if prs.iter().all(|pr| pr.len() <= max_len) {
+                    Self::Inexact(prs)
+                } else {
+                    let mut expanded = Vec::new();
+                    for pr in prs {
+                        if pr.len() <= max_len {
+                            expanded.push(pr);
+                        } else {
+                            expanded.append(&mut pr.split_to_max_len(max_len))
+                        }
+                    }
+                    Self::Inexact(expanded)
+                }
+            }
+            Self::None => Self::None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -33,8 +65,6 @@ impl PrefixRangeSet {
 
     // Len is the number of prefix ranges represented by this PrefixRangeSet.
     // The i-th prefix range can be extracted using `write_state_to(i, ...)`.
-    // TODO it might be convenient to just index PrefixRangeSet and capture
-    // the state generation in a new struct.
     pub fn len(&self) -> usize {
         self.0.iter().map(LiteralSet::len).product()
     }
@@ -52,6 +82,27 @@ impl PrefixRangeSet {
             state = state % place_value;
             ls.write_state_to(ls_state, start, end);
         }
+    }
+
+    pub fn split_to_max_len(self, max: usize) -> Vec<PrefixRangeSet> {
+        debug_assert!(self.0.len() > 0);
+        debug_assert!(self.len() > max);
+        // TODO this method needs testing
+        for chunk_size in (2..(self.0.len() / 3)).into_iter().rev() {
+            if self
+                .0
+                .chunks(chunk_size)
+                .all(|chunk| chunk.iter().map(LiteralSet::len).product::<usize>() < max)
+            {
+                return self
+                    .0
+                    .chunks(chunk_size)
+                    .map(|chunk| PrefixRangeSet(chunk.to_vec()))
+                    .collect();
+            }
+        }
+        // If this fails...just use the original. Hopefully, this doesn't happen
+        return vec![self];
     }
 }
 

@@ -48,6 +48,8 @@ pub struct SearchArgs {
     pub count_only: bool,
     #[clap(long = "repeat", short = 'r', default_value = "1")]
     pub repeat: usize,
+    #[clap(long = "cache-size")]
+    pub cache_size: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -70,8 +72,13 @@ fn main() -> Result<(), Error> {
 }
 
 fn search(args: SearchArgs) -> Result<(), Error> {
+    let cache_size: u64 = match args.cache_size {
+        Some(s) => bytefmt::parse(&s).expect("failed to parse cache size"),
+        None => 256 * 1024 * 1024,
+    };
     let s = Shard::open(&args.shard)?;
-    let c = cache::new_cache(1024 * 1024 * 1024); // 4 GiB
+    let content_size = s.header.content_len;
+    let c = cache::new_cache(cache_size); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
     for i in 0..args.repeat {
@@ -101,8 +108,9 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         buf.flush()?;
 
         println!(
-            "Iter: {}, Count: {}, Elapsed: {:?}",
+            "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:?}",
             i,
+            bytefmt::format(content_size),
             count,
             start.elapsed()
         );
