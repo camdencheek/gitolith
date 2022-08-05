@@ -30,11 +30,12 @@ pub struct DocMatch {
     pub content: Arc<Vec<u8>>,
 }
 
-pub fn search_regex(
+pub fn search_regex<'a>(
     s: CachedShard,
-    query: &str,
+    query: &'_ str,
     skip_index: bool,
-) -> Result<Box<dyn Iterator<Item = DocMatch>>, Error> {
+    scope: &'a rayon::ScopeFifo,
+) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
     let re = Regex::new(query)?;
     let ast = regex_syntax::ast::parse::Parser::new()
         .parse(re.as_str())
@@ -67,7 +68,7 @@ pub fn search_regex(
             let docs = Arc::new(s.docs());
             Ok(Box::new(
                 doc_ids
-                    .par_map(128, move |doc_id| -> DocMatch {
+                    .par_map(scope, 128, move |doc_id| -> DocMatch {
                         let content = docs.read_content(doc_id, &doc_ends);
                         let matched_ranges: Vec<Range<u32>> = re
                             .find_iter(&content)
@@ -108,7 +109,7 @@ pub fn search_regex(
                 })
                 .collect();
             let filtered = AndDocIterator::new(content_idx_iters)
-                .par_map(32, move |doc_id| -> DocMatch {
+                .par_map(scope, 32, move |doc_id| -> DocMatch {
                     let content = docs.read_content(doc_id, &doc_ends);
                     let matched_ranges: Vec<Range<u32>> = re
                         .find_iter(&content)
@@ -339,28 +340,30 @@ where
     }
 }
 
-struct ParallelMap<T, R, I, F>
+struct ParallelMap<'a, 'scope, T, R, I, F>
 where
     I: Iterator<Item = T>,
 {
     f: F,
     input: I,
+    scope: &'a rayon::ScopeFifo<'scope>,
     senders: Vec<Sender<R>>,
     receivers: Vec<Receiver<R>>,
     next_receiver: Cycle<Range<usize>>,
 }
 
-impl<T, R, I, F> ParallelMap<T, R, I, F>
+impl<'a, 'scope, T, R, I, F> ParallelMap<'a, 'scope, T, R, I, F>
 where
-    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
     I: Iterator<Item = T>,
     T: Send + 'static,
     R: Send + 'static,
 {
-    fn new(input: I, max_parallel: usize, f: F) -> Self {
+    fn new(input: I, scope: &'a rayon::ScopeFifo<'scope>, max_parallel: usize, f: F) -> Self {
         Self {
             f,
             input,
+            scope,
             senders: Vec::with_capacity(max_parallel),
             receivers: Vec::with_capacity(max_parallel),
             next_receiver: (0..max_parallel).cycle(),
@@ -396,16 +399,16 @@ where
         let tx = self.senders[idx].clone();
         let f = self.f.clone();
         // TODO it would be best to pass in a scope here so we can propagate panics.
-        rayon::spawn_fifo(move || {
+        self.scope.spawn_fifo(move |_| {
             let r = f(next_input);
             tx.send(r);
         });
     }
 }
 
-impl<T, R, I, F> Iterator for ParallelMap<T, R, I, F>
+impl<'a, 'scope, T, R, I, F> Iterator for ParallelMap<'a, 'scope, T, R, I, F>
 where
-    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
     I: Iterator<Item = T>,
     T: Send + 'static,
     R: Send + 'static,
@@ -429,22 +432,32 @@ where
     }
 }
 
-trait IteratorExt<T, R, I, F>
+trait IteratorExt<'a, 'scope, T, R, I, F>
 where
     I: Iterator<Item = T>,
 {
     // Guarantees the same order
-    fn par_map(self, max_parallel: usize, f: F) -> ParallelMap<T, R, I, F>;
+    fn par_map(
+        self,
+        scope: &'a rayon::ScopeFifo<'scope>,
+        max_parallel: usize,
+        f: F,
+    ) -> ParallelMap<'a, 'scope, T, R, I, F>;
 }
 
-impl<T, R, I, F> IteratorExt<T, R, I, F> for I
+impl<'a, 'scope, T, R, I, F> IteratorExt<'a, 'scope, T, R, I, F> for I
 where
-    F: Fn(T) -> R + Send + Sync + Clone + 'static,
+    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
     I: Iterator<Item = T>,
     T: Send + 'static,
     R: Send + 'static,
 {
-    fn par_map(self, max_parallel: usize, f: F) -> ParallelMap<T, R, I, F> {
-        ParallelMap::new(self, max_parallel, f)
+    fn par_map(
+        self,
+        scope: &'a rayon::ScopeFifo<'scope>,
+        max_parallel: usize,
+        f: F,
+    ) -> ParallelMap<'a, 'scope, T, R, I, F> {
+        ParallelMap::new(self, scope, max_parallel, f)
     }
 }

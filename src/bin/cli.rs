@@ -84,36 +84,40 @@ fn search(args: SearchArgs) -> Result<(), Error> {
     for i in 0..args.repeat {
         let start = Instant::now();
 
-        let handle = std::io::stdout().lock();
-        let mut buf = std::io::BufWriter::new(handle);
+        rayon::in_place_scope_fifo(|s| -> Result<(), Error> {
+            let handle = std::io::stdout().lock();
+            let mut buf = std::io::BufWriter::new(handle);
 
-        let mut count = 0;
-        for doc_match in search_regex(cs.clone(), &args.query, args.skip_index)? {
-            if !args.count_only {
-                buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
-            }
-            for r in doc_match.matches {
-                count += 1;
+            let mut count = 0;
 
+            for doc_match in search_regex(cs.clone(), &args.query, args.skip_index, s)? {
                 if !args.count_only {
-                    buf.write_fmt(format_args!(
-                        "{}\n",
-                        String::from_utf8_lossy(
-                            &doc_match.content[r.start as usize..r.end as usize]
-                        ),
-                    ))?;
+                    buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
+                }
+                for r in doc_match.matches {
+                    count += 1;
+
+                    if !args.count_only {
+                        buf.write_fmt(format_args!(
+                            "{}\n",
+                            String::from_utf8_lossy(
+                                &doc_match.content[r.start as usize..r.end as usize]
+                            ),
+                        ))?;
+                    }
                 }
             }
-        }
-        buf.flush()?;
+            buf.flush()?;
 
-        println!(
-            "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:?}",
-            i,
-            bytefmt::format(content_size),
-            count,
-            start.elapsed()
-        );
+            println!(
+                "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:?}",
+                i,
+                bytefmt::format(content_size),
+                count,
+                start.elapsed()
+            );
+            Ok(())
+        })?;
     }
 
     Ok(())
