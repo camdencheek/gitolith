@@ -53,9 +53,9 @@ pub fn search_regex(
         ExtractedRegexLiterals::Exact(e) => ExtractedRegexLiterals::Inexact(vec![e]),
         _ => extracted,
     };
-    dbg!(&extracted);
+    // dbg!(&extracted);
     extracted = extracted.optimize();
-    dbg!(&extracted);
+    // dbg!(&extracted);
 
     match extracted {
         ExtractedRegexLiterals::None => {
@@ -135,6 +135,54 @@ pub fn search_regex(
         //         }
         //     },
         // ))),
+    }
+}
+
+struct AndDocIterator<T> {
+    children: Vec<T>,
+}
+
+impl<T> AndDocIterator<T> {
+    fn new(children: Vec<T>) -> Self {
+        Self { children }
+    }
+}
+
+impl<T> Iterator for AndDocIterator<T>
+where
+    T: Iterator<Item = DocID>,
+{
+    type Item = DocID;
+
+    fn next(&mut self) -> Option<DocID> {
+        let mut min_doc = DocID(0);
+        let mut children_with_min_doc = 0;
+        let num_children = self.children.len();
+
+        for child_idx in (0..num_children).cycle() {
+            // SAFETY: child_idx will never be out of bounds because we're iterating
+            // over indexes from 0..self.children.len()
+            let mut child = unsafe { self.children.get_unchecked_mut(child_idx) };
+
+            loop {
+                let next_doc = child.next()?;
+                if next_doc == min_doc {
+                    children_with_min_doc += 1;
+                    if children_with_min_doc == num_children {
+                        // All children have yielded the current doc
+                        return Some(min_doc);
+                    }
+                } else if next_doc > min_doc {
+                    // The current child doesn't contain min_doc,
+                    // so update min_doc and continue searching the other
+                    // children for the new one.
+                    min_doc = next_doc;
+                    children_with_min_doc = 1;
+                    break;
+                }
+            }
+        }
+        None
     }
 }
 
