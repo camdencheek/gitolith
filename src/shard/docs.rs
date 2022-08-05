@@ -100,6 +100,10 @@ impl DocEnds {
         Self(v)
     }
 
+    pub fn iter_docs(&self) -> DocIDIterator {
+        DocIDIterator::new(self.doc_count() as u32)
+    }
+
     pub fn doc_count(&self) -> usize {
         self.0.len()
     }
@@ -115,7 +119,6 @@ impl DocEnds {
         self.doc_start(id)..self.doc_end(id)
     }
 
-    #[inline]
     pub fn doc_start(&self, doc: DocID) -> ContentIdx {
         if doc == DocID(0) {
             ContentIdx(0)
@@ -124,7 +127,6 @@ impl DocEnds {
         }
     }
 
-    #[inline]
     pub fn doc_end(&self, doc: DocID) -> ContentIdx {
         self.0[usize::from(doc)]
     }
@@ -148,6 +150,7 @@ impl DocEnds {
     }
 }
 
+// TODO determine whether this is actually worth using
 pub struct CompressedDocEnds(EliasFano);
 
 impl CompressedDocEnds {
@@ -170,6 +173,40 @@ impl CompressedDocEnds {
         };
         let end = ContentIdx(self.0.select(u32::from(id) as usize) as u32);
         start..end
+    }
+}
+
+pub struct DocIDIterator {
+    next_doc: DocID,
+    max_doc: DocID,
+}
+
+impl DocIDIterator {
+    fn new(count: u32) -> Self {
+        Self {
+            next_doc: DocID(0),
+            max_doc: DocID(count + 1),
+        }
+    }
+}
+
+impl Iterator for DocIDIterator {
+    type Item = DocID;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next_doc = self.next_doc;
+        if next_doc >= self.max_doc {
+            None
+        } else {
+            self.next_doc += DocID(1);
+            Some(next_doc)
+        }
+    }
+}
+
+impl ExactSizeIterator for DocIDIterator {
+    fn len(&self) -> usize {
+        self.max_doc.0 as usize
     }
 }
 

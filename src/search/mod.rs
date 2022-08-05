@@ -12,6 +12,7 @@ use crate::shard::cached::{
     CachedDocs, CachedShard, CachedSuffixes, SuffixBlockIterator, SuffixRangeIterator,
 };
 use crate::shard::content::ContentIdx;
+use crate::shard::docs::DocIDIterator;
 use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
 use crate::shard::{
     docs::{CompressedDocEnds, DocEnds, DocID, DocStore},
@@ -80,7 +81,7 @@ pub fn search_regex(
                         }
                     })
                     // TODO would a par_filter_map be more efficient here?
-                    .filter(|doc_match| doc_match.matches.len() > 0)
+                    .filter(|doc_match| doc_match.matches.len() > 0),
             ))
         }
         ExtractedRegexLiterals::Exact(set) => {
@@ -88,53 +89,41 @@ pub fn search_regex(
         }
         ExtractedRegexLiterals::Inexact(all) => {
             let doc_ends = s.docs().read_doc_ends();
-            let suffixes1 = s.suffixes();
+            let suffixes = s.suffixes();
             let doc_ids = s.docs().doc_ids();
             let docs = Arc::new(s.docs());
-            Ok(Box::new(
-                    InexactDocIterator::new(
-                        doc_ends.clone(),
-                        all
-                            .into_iter()
-                            .map(move |rs| SuffixRangeIterator::new(rs, suffixes1.clone()))
-                            .map(|suf_range_iter| {
-                                let suffixes2 = s.suffixes();
-                                suf_range_iter
-                                    .filter(|suf_range| suf_range.start != suf_range.end)
-                                    .map(move |suf_range| {
-                                        ContentIdxIterator::new(suf_range, suffixes2.clone())
-                                    })
-                                    .flatten()
-                            })
-                            .collect()
-                    ).par_map(32, move |doc_id| -> DocMatch {
-                        let content = docs.read_content(doc_id, &doc_ends);
-                        let matched_ranges: Vec<Range<u32>> = re
-                            .find_iter(&content)
-                            .map(|m| m.start() as u32..m.end() as u32)
-                            .collect();
 
-                        DocMatch {
-                            id: doc_id,
-                            matches: matched_ranges,
-                            content,
-                        }
-                    })
-            .filter(|doc_match| doc_match.matches.len() > 0)
-                ))
+            let content_idx_iters = all
+                .into_iter()
+                .map(|rs| SuffixRangeIterator::new(rs, suffixes.clone()))
+                .map(|suf_range_iter| {
+                    let suffixes2 = s.suffixes();
+                    suf_range_iter
+                        .filter(|suf_range| suf_range.start != suf_range.end)
+                        .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes2.clone()))
+                        .flatten()
+                })
+                .map(|content_idx_iter| {
+                    ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter)
+                })
+                .collect();
+            let filtered = AndDocIterator::new(content_idx_iters)
+                .par_map(32, move |doc_id| -> DocMatch {
+                    let content = docs.read_content(doc_id, &doc_ends);
+                    let matched_ranges: Vec<Range<u32>> = re
+                        .find_iter(&content)
+                        .map(|m| m.start() as u32..m.end() as u32)
+                        .collect();
+
+                    DocMatch {
+                        id: doc_id,
+                        matches: matched_ranges,
+                        content,
+                    }
+                })
+                .filter(|doc_match| doc_match.matches.len() > 0);
+            Ok(Box::new(filtered))
         }
-        // ExtractedRegexLiterals::Inexact(all) => Ok(Box::new(all.iter().map(
-        //     |prefix_set| -> Result<BitVec, Error> {
-        //         let mut start = Vec::new();
-        //         let mut end = Vec::new();
-
-        //         for i in prefix_set.len() {
-        //             start.clear();
-        //             end.clear();
-        //             prefix_set.write_state_to(i, &mut start, &mut end);
-        //         }
-        //     },
-        // ))),
     }
 }
 
@@ -168,16 +157,16 @@ where
                 let next_doc = child.next()?;
                 if next_doc == min_doc {
                     children_with_min_doc += 1;
-                    if children_with_min_doc == num_children {
-                        // All children have yielded the current doc
-                        return Some(min_doc);
-                    }
                 } else if next_doc > min_doc {
                     // The current child doesn't contain min_doc,
                     // so update min_doc and continue searching the other
                     // children for the new one.
                     min_doc = next_doc;
                     children_with_min_doc = 1;
+                    if children_with_min_doc == num_children {
+                        // All children have yielded the current doc
+                        return Some(min_doc);
+                    }
                     break;
                 }
             }
@@ -186,72 +175,49 @@ where
     }
 }
 
-struct InexactDocIterator<T> {
-    seen_docs: Vec<BitVec>,
-    next_doc_id: DocID,
-    max_doc_id: DocID,
-    content_idx_iters: Vec<T>,
+// ContentIdxDocFilter filters an iterator of DocIDs to only the docs
+// that contain one of the ContentIdx yielded by a ContentIdx iterator.
+struct ContentIdxDocIterator<C> {
+    seen_docs: BitVec,
+    doc_iter: DocIDIterator,
+    content_idx_iter: C,
     doc_ends: Arc<DocEnds>,
 }
 
-impl<T> InexactDocIterator<T>
-where
-    T: Iterator<Item = ContentIdx>,
-{
-    fn new(doc_ends: Arc<DocEnds>, content_idx_iters: Vec<T>) -> Self {
+impl<C> ContentIdxDocIterator<C> {
+    fn new(doc_ends: Arc<DocEnds>, content_idx_iter: C) -> Self {
+        let doc_iter = doc_ends.iter_docs();
         Self {
-            seen_docs: vec![bitvec::bitvec![0; doc_ends.doc_count()]; content_idx_iters.len()],
-            next_doc_id: DocID(0),
-            max_doc_id: doc_ends.max_doc_id(),
-            content_idx_iters,
+            seen_docs: bitvec::bitvec![0; doc_iter.len()],
+            doc_iter: doc_ends.iter_docs(),
+            content_idx_iter,
             doc_ends,
         }
     }
-
-    fn iter_contains_doc(&mut self, iter_idx: usize, doc_id: DocID) -> bool {
-        let mut seen_docs = &mut self.seen_docs[iter_idx];
-
-        if seen_docs[usize::from(doc_id)] {
-            return true;
-        }
-
-        let mut idx_iter = &mut self.content_idx_iters[iter_idx];
-        while let Some(content_idx) = idx_iter.next() {
-            // TODO we can theoretically speed this up by limiting the range
-            // of docs being considered to only consider docs > doc_id.
-            // I tried this and it didn't seem to make a difference.
-            let idx_doc_id = self.doc_ends.find(content_idx);
-            if idx_doc_id == doc_id {
-                return true;
-            } else if idx_doc_id > doc_id {
-                seen_docs.set(usize::from(idx_doc_id), true);
-            }
-        }
-        false
-    }
 }
 
-impl<T> Iterator for InexactDocIterator<T>
+impl<C> Iterator for ContentIdxDocIterator<C>
 where
-    T: Iterator<Item = ContentIdx>,
+    C: Iterator<Item = ContentIdx>,
 {
     type Item = DocID;
 
     fn next(&mut self) -> Option<Self::Item> {
-        'OUTER: while self.next_doc_id <= self.max_doc_id {
-            let doc_id = self.next_doc_id;
-            self.next_doc_id += DocID(1);
-
-            for i in 0..self.content_idx_iters.len() {
-                if !self.iter_contains_doc(i, doc_id) {
-                    continue 'OUTER;
-                }
+        while let Some(doc_id) = self.doc_iter.next() {
+            if self.seen_docs[usize::from(doc_id)] {
+                return Some(doc_id);
             }
 
-            return Some(doc_id);
+            while let Some(content_idx) = self.content_idx_iter.next() {
+                let content_doc_id = self.doc_ends.find(content_idx);
+                if content_doc_id == doc_id {
+                    return Some(doc_id);
+                } else {
+                    self.seen_docs.set(usize::from(content_doc_id), true);
+                }
+            }
         }
-
-        return None;
+        None
     }
 }
 
