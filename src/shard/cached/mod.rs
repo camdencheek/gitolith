@@ -197,6 +197,8 @@ impl CachedSuffixes {
                 prefix_slice = right;
                 if content < left {
                     return true;
+                } else if content > left {
+                    return false;
                 }
             }
             // prefix is equal
@@ -229,6 +231,8 @@ impl CachedSuffixes {
                 prefix_slice = right;
                 if content < left {
                     return true;
+                } else if content > left {
+                    return false;
                 }
             }
             // prefix is equal
