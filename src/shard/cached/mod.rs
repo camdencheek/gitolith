@@ -160,11 +160,8 @@ impl CachedSuffixes {
         T: AsRef<[u8]> + Eq,
     {
         let start_bounds = trigrams.bounds(prefix_range.start()..=prefix_range.start());
-        let end_bounds = if prefix_range.start() == prefix_range.end() {
-            start_bounds.clone()
-        } else {
-            trigrams.bounds(prefix_range.end()..=prefix_range.end())
-        };
+        let end_bounds = trigrams.bounds(prefix_range.end()..=prefix_range.end());
+
         if start_bounds.start == end_bounds.end {
             // Return early if there are no trigrams that match
             return start_bounds.start..end_bounds.end;
@@ -172,7 +169,7 @@ impl CachedSuffixes {
 
         let (start, end) = prefix_range.into_inner();
         let start_bound = self.lookup_prefix_start(start, start_bounds);
-        let end_bound = self.lookup_prefix_end(&end, start_bound..trigrams.upper_bound(&end));
+        let end_bound = self.lookup_prefix_end(end, start_bound..end_bounds.end);
         start_bound..end_bound
     }
 
