@@ -9,6 +9,7 @@ use sucds::elias_fano::EliasFano;
 use sucds::{EliasFanoBuilder, Searial};
 
 use super::content::{ContentIdx, ContentStore};
+use suffix;
 
 #[derive(
     Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
@@ -120,7 +121,7 @@ impl SuffixArrayStore {
 
 // A set of pointers into the suffix array to the end (exclusive) of the range
 // of suffixes that start with that trigram.
-pub struct TrigramPointers(Box<[SuffixIdx; Self::N_TRIGRAMS]>);
+pub struct TrigramPointers(Vec<SuffixIdx>);
 
 impl TrigramPointers {
     // The number of unique trigrams given a 256-character alphabet (u8)
@@ -129,7 +130,7 @@ impl TrigramPointers {
     pub fn from_content(content: &[u8]) -> Self {
         // Use SuffixIdx in the frequencies array so we can mutate in-place
         // to get the pointers without any unsafe.
-        let mut frequencies = Box::new([SuffixIdx(0); Self::N_TRIGRAMS]);
+        let mut frequencies = vec![SuffixIdx(0); Self::N_TRIGRAMS];
 
         for i in 0..content.len() {
             let suffix = &content[i..];
@@ -137,7 +138,7 @@ impl TrigramPointers {
                 [a, b, c, ..] => u32::from_be_bytes([0, *a, *b, *c]),
                 [a, b] => u32::from_be_bytes([0, *a, *b, 0]),
                 [a] => u32::from_be_bytes([0, *a, 0, 0]),
-                _ => unreachable!("should not ever have an empty slice"),
+                _ => u32::from_be_bytes([0, 0, 0, 0]),
             };
             frequencies[trigram_idx as usize] += SuffixIdx(1)
         }
@@ -152,8 +153,8 @@ impl TrigramPointers {
         Self(pointers)
     }
 
-    pub fn compress(&self) -> CompressedTrigramPointers {
-        CompressedTrigramPointers::new(&self.0)
+    pub fn compress(self) -> CompressedTrigramPointers {
+        CompressedTrigramPointers::new(self.0)
     }
 }
 
@@ -161,10 +162,10 @@ impl TrigramPointers {
 pub struct CompressedTrigramPointers(EliasFano);
 
 impl CompressedTrigramPointers {
-    pub fn new(pointers: &[SuffixIdx; TrigramPointers::N_TRIGRAMS]) -> Self {
+    pub fn new(pointers: Vec<SuffixIdx>) -> Self {
         let universe = u32::from(pointers[TrigramPointers::N_TRIGRAMS - 1]) as usize + 1;
         let mut builder = EliasFanoBuilder::new(universe, pointers.len()).unwrap();
-        for &idx in pointers {
+        for idx in pointers {
             builder.push(u32::from(idx) as usize).unwrap();
         }
         CompressedTrigramPointers(builder.build())
@@ -176,11 +177,18 @@ impl CompressedTrigramPointers {
     where
         T: AsRef<[u8]>,
     {
-        self.lower_bound(r.start())..self.upper_bound(r.end())
+        SuffixIdx(self.lower_bound(r.start()))..SuffixIdx(self.upper_bound(r.end()))
+    }
+
+    pub fn selectivity<T>(&self, r: RangeInclusive<T>) -> f64
+    where
+        T: AsRef<[u8]>,
+    {
+        (self.upper_bound(r.end()) - self.lower_bound(r.start())) as f64 / self.0.universe() as f64
     }
 
     // Returns an inclusive lower bound on the suffixes with the prefix needle
-    fn lower_bound<T>(&self, needle: T) -> SuffixIdx
+    fn lower_bound<T>(&self, needle: T) -> u32
     where
         T: AsRef<[u8]>,
     {
@@ -190,11 +198,11 @@ impl CompressedTrigramPointers {
             [a] => u32::from_be_bytes([0, *a, 0, 0]),
             [] => 0,
         };
-        SuffixIdx(self.0.select(idx as usize) as u32)
+        self.0.select(idx as usize) as u32
     }
 
     // Returns an exclusive upper bound on the suffixes with the prefix needle
-    fn upper_bound<T>(&self, needle: T) -> SuffixIdx
+    fn upper_bound<T>(&self, needle: T) -> u32
     where
         T: AsRef<[u8]>,
     {
@@ -205,7 +213,7 @@ impl CompressedTrigramPointers {
             [a] => u32::from_be_bytes([0, 0, 0, *a]).saturating_add(1) << 16,
             [] => self.0.len() as u32,
         };
-        SuffixIdx(self.0.select(idx as usize) as u32)
+        self.0.select(idx as usize) as u32
     }
 
     pub fn serialize_into<W: std::io::Write>(
@@ -237,4 +245,89 @@ pub enum ReadTrigramPointersError {
     IO(#[from] io::Error),
     #[error("failed to deserialize trigram pointers")]
     Deserialize(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod test {
+    use std::io::Stderr;
+
+    use super::*;
+
+    fn concat_strs(input: &[&str]) -> Vec<u8> {
+        let mut content = Vec::new();
+        for s in input {
+            content.extend_from_slice(s.as_bytes());
+            content.push(0);
+        }
+        content
+    }
+
+    fn concat_bytes(input: &[&[u8]]) -> Vec<u8> {
+        let mut content = Vec::new();
+        for s in input {
+            content.extend_from_slice(s);
+            content.push(0);
+        }
+        content
+    }
+
+    fn new_trigrams(content: &[u8]) -> CompressedTrigramPointers {
+        TrigramPointers::from_content(content).compress()
+    }
+
+    fn new_sa(content: &[u8]) -> Vec<u32> {
+        let mut sa = vec![0u32; content.len()];
+        let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
+        let mut bins = suffix::Bins::new();
+        suffix::sais(sa.as_mut(), &mut stypes, &mut bins, &suffix::Utf8(content));
+        sa
+    }
+
+    #[test]
+    fn test_compressed() {
+        let content = concat_strs(&[
+            "document dockument",
+            "document mockument",
+            "document lockument",
+            "document stockmument",
+            "document schmockmument",
+        ]);
+        let trigrams = new_trigrams(&content);
+        let sa = new_sa(&content);
+        let bounds = trigrams.bounds(b"doc"..=b"doc");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(6));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"doc"))
+        }
+
+        let bounds = trigrams.bounds(b"do"..=b"do");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(6));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"do"))
+        }
+
+        let bounds = trigrams.bounds(b"d"..=b"d");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(6));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"d"))
+        }
+
+        let bounds = trigrams.bounds(b"men"..=b"men");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(10));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"men"))
+        }
+
+        let bounds = trigrams.bounds(b"ent"..=b"ent");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(10));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"ent"))
+        }
+
+        let bounds = trigrams.bounds(b"nt"..=b"nt");
+        assert_eq!(bounds.end - bounds.start, SuffixIdx(10));
+        for idx in u32::from(bounds.start)..u32::from(bounds.end) {
+            assert!(content[sa[idx as usize] as usize..].starts_with(b"nt"))
+        }
+    }
 }

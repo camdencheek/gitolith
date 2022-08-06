@@ -185,6 +185,9 @@ impl CachedSuffixes {
             let block = self.read_block(block_id);
             let content_idx = block.0[offset];
             let doc_id = doc_ends.find(content_idx);
+            // TODO this is not strictly correct for documents with null bytes.
+            // In order to do this lookup correctly, we need to potentially
+            // compare across multiple documents.
             let doc_content = self.docs.read_content(doc_id, &doc_ends);
             let doc_content_range = doc_ends.content_range(doc_id);
             let prefix_slice: &[u8] = prefix.as_ref();

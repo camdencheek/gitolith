@@ -123,7 +123,7 @@ impl DocEnds {
         if doc == DocID(0) {
             ContentIdx(0)
         } else {
-            self.0[usize::from(doc) - 1]
+            self.0[usize::from(doc) - 1] + ContentIdx(1)
         }
     }
 

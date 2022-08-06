@@ -1,8 +1,11 @@
 use std::ops::Range;
+use std::sync::Arc;
 use std::{io::Write, ops::RangeInclusive};
 
 use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
+
+use crate::shard::suffix::CompressedTrigramPointers;
 
 #[derive(Clone, Debug)]
 pub enum ExtractedRegexLiterals {
@@ -23,38 +26,6 @@ pub enum ExtractedRegexLiterals {
     None,
 }
 
-impl ExtractedRegexLiterals {
-    pub fn optimize(self) -> ExtractedRegexLiterals {
-        // TODO tune this
-        let max_len = 128;
-        match self {
-            Self::Exact(pr) => {
-                if pr.len() <= max_len {
-                    Self::Exact(pr)
-                } else {
-                    Self::Inexact(pr.split_to_max_len(max_len))
-                }
-            }
-            Self::Inexact(prs) => {
-                if prs.iter().all(|pr| pr.len() <= max_len) {
-                    Self::Inexact(prs)
-                } else {
-                    let mut expanded = Vec::new();
-                    for pr in prs {
-                        if pr.len() <= max_len {
-                            expanded.push(pr);
-                        } else {
-                            expanded.append(&mut pr.split_to_max_len(max_len))
-                        }
-                    }
-                    Self::Inexact(expanded)
-                }
-            }
-            Self::None => Self::None,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct PrefixRangeSet(Vec<LiteralSet>);
 
@@ -67,6 +38,14 @@ impl PrefixRangeSet {
     // The i-th prefix range can be extracted using `write_state_to(i, ...)`.
     pub fn len(&self) -> usize {
         self.0.iter().map(LiteralSet::len).product()
+    }
+
+    pub fn selectivity(&self, pointers: &Arc<CompressedTrigramPointers>) -> f64 {
+        self.0.iter().map(|ls| ls.selectivity(&pointers)).product()
+    }
+
+    pub fn literals(&self) -> &[LiteralSet] {
+        self.0.as_ref()
     }
 
     pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
@@ -82,27 +61,6 @@ impl PrefixRangeSet {
             state = state % place_value;
             ls.write_state_to(ls_state, start, end);
         }
-    }
-
-    pub fn split_to_max_len(self, max: usize) -> Vec<PrefixRangeSet> {
-        debug_assert!(self.0.len() > 0);
-        debug_assert!(self.len() > max);
-        // TODO this method needs testing
-        for chunk_size in (2..(self.0.len() / 3)).into_iter().rev() {
-            if self
-                .0
-                .chunks(chunk_size)
-                .all(|chunk| chunk.iter().map(LiteralSet::len).product::<usize>() < max)
-            {
-                return self
-                    .0
-                    .chunks(chunk_size)
-                    .map(|chunk| PrefixRangeSet(chunk.to_vec()))
-                    .collect();
-            }
-        }
-        // If this fails...just use the original. Hopefully, this doesn't happen
-        return vec![self];
     }
 }
 
@@ -121,7 +79,7 @@ pub enum LiteralSet {
 }
 
 impl LiteralSet {
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         use LiteralSet::*;
 
         match self {
@@ -130,6 +88,34 @@ impl LiteralSet {
             ByteClass(v) => v.len(),
             UnicodeClass(v) => v.len(),
             Alternation(v) => v.iter().map(|s| s.len()).sum(),
+        }
+    }
+
+    pub fn selectivity(&self, pointers: &Arc<CompressedTrigramPointers>) -> f64 {
+        use LiteralSet::*;
+
+        match self {
+            Byte(b) => pointers.as_ref().selectivity([*b]..=[*b]),
+            Unicode(c) => {
+                let mut dst = [0u8; 4];
+                let encoded = c.encode_utf8(&mut dst);
+                pointers.as_ref().selectivity(&encoded..=&encoded)
+            }
+            ByteClass(v) => v
+                .iter()
+                .map(|c| pointers.as_ref().selectivity([c.start()]..=[c.end()]))
+                .sum(),
+            UnicodeClass(v) => v
+                .iter()
+                .map(|c| {
+                    let mut start_buf = [0u8; 4];
+                    let start = c.start().encode_utf8(&mut start_buf);
+                    let mut end_buf = [0u8; 4];
+                    let end = c.end().encode_utf8(&mut end_buf);
+                    pointers.as_ref().selectivity(&start..=&end)
+                })
+                .sum(),
+            Alternation(v) => v.iter().map(|ps| ps.selectivity(&pointers)).sum(),
         }
     }
 

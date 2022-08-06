@@ -13,13 +13,13 @@ use crate::shard::cached::{
 };
 use crate::shard::content::ContentIdx;
 use crate::shard::docs::DocIDIterator;
-use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
+use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID, SuffixIdx};
 use crate::shard::{
     docs::{CompressedDocEnds, DocEnds, DocID, DocStore},
     Shard,
 };
 
-use self::regex::{extract_regex_literals, ExtractedRegexLiterals, PrefixRangeSet};
+use self::regex::{extract_regex_literals, ExtractedRegexLiterals, LiteralSet, PrefixRangeSet};
 
 pub mod regex;
 
@@ -49,14 +49,13 @@ pub fn search_regex<'a>(
     } else {
         extract_regex_literals(hir)
     };
-    // TODO optimize extracted
 
     extracted = match extracted {
         ExtractedRegexLiterals::Exact(e) => ExtractedRegexLiterals::Inexact(vec![e]),
         _ => extracted,
     };
     // dbg!(&extracted);
-    extracted = extracted.optimize();
+    extracted = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
     // dbg!(&extracted);
 
     match extracted {
@@ -156,20 +155,21 @@ where
 
             loop {
                 let next_doc = child.next()?;
+                if next_doc < min_doc {
+                    continue;
+                }
+
                 if next_doc == min_doc {
                     children_with_min_doc += 1;
                 } else if next_doc > min_doc {
-                    // The current child doesn't contain min_doc,
-                    // so update min_doc and continue searching the other
-                    // children for the new one.
                     min_doc = next_doc;
                     children_with_min_doc = 1;
-                    if children_with_min_doc == num_children {
-                        // All children have yielded the current doc
-                        return Some(min_doc);
-                    }
-                    break;
                 }
+                if children_with_min_doc == num_children {
+                    // All children have yielded the current doc
+                    return Some(min_doc);
+                }
+                break;
             }
         }
         None
@@ -459,5 +459,149 @@ where
         f: F,
     ) -> ParallelMap<'a, 'scope, T, R, I, F> {
         ParallelMap::new(self, scope, max_parallel, f)
+    }
+}
+
+fn optimize_extracted(
+    extracted: ExtractedRegexLiterals,
+    trigrams: &Arc<CompressedTrigramPointers>,
+) -> ExtractedRegexLiterals {
+    use ExtractedRegexLiterals::*;
+
+    match extracted {
+        // We don't handle exact matches specially right now,
+        // so just optimize it as inexact.
+        Exact(set) => optimize_inexact_literals(vec![set], trigrams),
+        Inexact(sets) => optimize_inexact_literals(sets, trigrams),
+        None => None,
+    }
+}
+
+fn optimize_inexact_literals(
+    sets: Vec<PrefixRangeSet>,
+    trigrams: &Arc<CompressedTrigramPointers>,
+) -> ExtractedRegexLiterals {
+    let mut sets: Vec<PrefixRangeSet> = sets
+        .into_iter()
+        .map(|set| optimize_prefix_range_set(set, &trigrams))
+        .flatten()
+        .filter(|set| set.selectivity(&trigrams) < 0.0001)
+        .collect();
+
+    if sets.len() == 0 {
+        return ExtractedRegexLiterals::None;
+    }
+
+    sets.sort_by(|a, b| {
+        a.selectivity(&trigrams)
+            .partial_cmp(&b.selectivity(&trigrams))
+            .unwrap()
+            .reverse()
+    });
+    sets.truncate(3);
+    ExtractedRegexLiterals::Inexact(sets)
+}
+
+fn optimize_prefix_range_set(
+    set: PrefixRangeSet,
+    trigrams: &Arc<CompressedTrigramPointers>,
+) -> Vec<PrefixRangeSet> {
+    let max_len = 256;
+    let total_len = set.len();
+    if total_len < max_len {
+        return vec![set];
+    }
+
+    let lits = set.literals();
+    let mut res = Vec::new();
+    for num_slices in 2..lits.len() {
+        res.clear();
+        let target_product = (total_len as f64).powf(1f64 / num_slices as f64) as usize;
+        if target_product > max_len {
+            continue;
+        }
+
+        let mut start = 0;
+        for slice_num in 0..num_slices - 1 {
+            for end in start + 1..lits.len() {
+                let slice_len: usize = lits[start..end].iter().map(LiteralSet::len).product();
+                if slice_len > target_product {
+                    res.push(lits[start..end - 1].to_vec());
+                    start = end - 1;
+                    break;
+                }
+            }
+        }
+        let last_slice = &lits[start..];
+        if last_slice.iter().map(LiteralSet::len).product::<usize>() > max_len {
+            continue;
+        }
+        res.push(last_slice.to_vec());
+        return res.into_iter().map(PrefixRangeSet::new).collect();
+    }
+
+    // I'm not 100% convinced the above loop will always terminate, so as
+    // a safety measure, always just return the original if optimization fails.
+    vec![set]
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+
+    use rayon::scope_fifo;
+
+    use crate::{
+        cache,
+        shard::{builder::ShardBuilder, cached::CachedShard, Shard, ShardID},
+    };
+
+    use super::search_regex;
+
+    fn build_shard() -> CachedShard {
+        let mut b = ShardBuilder::new(&Path::new("/tmp/testshard1")).unwrap();
+        for doc in &mut [
+            "document1".to_string(),
+            "document2".to_string(),
+            "contains needle".to_string(),
+            "contains needle and another needle".to_string(),
+            "contains case sensitive nEeDlE".to_string(),
+            "line1\nline2".to_string(),
+        ] {
+            b.add_doc(doc.as_bytes()).unwrap();
+        }
+        let s = b.build().unwrap();
+        let c = cache::new_cache(64 * 1024 * 1024); // 4 GiB
+        CachedShard::new(ShardID(0), s, c)
+    }
+
+    fn assert_count(s: CachedShard, re: &str, want_count: usize) {
+        scope_fifo(|scope| {
+            let got_count: usize = search_regex(s, re, false, scope)
+                .unwrap()
+                .map(|doc_match| doc_match.matches.len())
+                .sum();
+            assert_eq!(
+                want_count, got_count,
+                "expected different count for re '{}'",
+                re
+            );
+        })
+    }
+
+    #[test]
+    fn test_regex() {
+        let shard = build_shard();
+        assert_count(shard.clone(), r"doc", 2);
+        assert_count(shard.clone(), r"another", 1);
+        assert_count(shard.clone(), r"needle", 3);
+        assert_count(shard.clone(), r"ne.*ed.*le", 2);
+        assert_count(shard.clone(), r"ne.*?ed.*?le", 3);
+        assert_count(shard.clone(), r"(?i)needle", 4);
+        assert_count(shard.clone(), r"(?i)ne\w*ed\w*le", 4);
+        assert_count(shard.clone(), r".*", 7);
+        assert_count(shard.clone(), r"(?s).*", 6);
+        assert_count(shard.clone(), r"\w+", 15);
+        assert_count(shard.clone(), r"(?i)contains case sensitive", 1);
     }
 }

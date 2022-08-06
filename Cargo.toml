@@ -25,4 +25,7 @@ stretto = "0.6.2"
 bytefmt = "0.1.7"
 
 [profile.release]
+
+[dev-dependencies]
+tempfile = "3.3.0"
 # debug = true
