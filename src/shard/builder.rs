@@ -43,13 +43,9 @@ impl ShardBuilder {
         // Copy the document into the index
         let doc_len = io::copy(&mut doc, &mut self.file)?;
 
-        // Pad each file with a zero byte so each offset in the corpus
-        // is unambiguously associated with a single document.
-        self.file.write_all(&[0u8])?;
-
-        // Track the offsets of each doc-ending zero byte in the concatenated corpus
+        // Track the offsets of the exclusive end offset of each document in the corpus
         match self.doc_ends.as_slice() {
-            [.., last] => self.doc_ends.push(last + 1 + doc_len as u32),
+            [.., last] => self.doc_ends.push(last + doc_len as u32),
             [] => self.doc_ends.push(doc_len as u32),
         };
         Ok(DocID(self.doc_ends.len() as u32 - 1))

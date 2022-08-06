@@ -177,18 +177,19 @@ impl CompressedTrigramPointers {
     where
         T: AsRef<[u8]>,
     {
-        SuffixIdx(self.lower_bound(r.start()))..SuffixIdx(self.upper_bound(r.end()))
+        self.lower_bound(r.start())..self.upper_bound(r.end())
     }
 
     pub fn selectivity<T>(&self, r: RangeInclusive<T>) -> f64
     where
         T: AsRef<[u8]>,
     {
-        (self.upper_bound(r.end()) - self.lower_bound(r.start())) as f64 / self.0.universe() as f64
+        (u32::from(self.upper_bound(r.end())) - u32::from(self.lower_bound(r.start()))) as f64
+            / self.0.universe() as f64
     }
 
     // Returns an inclusive lower bound on the suffixes with the prefix needle
-    fn lower_bound<T>(&self, needle: T) -> u32
+    pub fn lower_bound<T>(&self, needle: T) -> SuffixIdx
     where
         T: AsRef<[u8]>,
     {
@@ -198,11 +199,11 @@ impl CompressedTrigramPointers {
             [a] => u32::from_be_bytes([0, *a, 0, 0]),
             [] => 0,
         };
-        self.0.select(idx as usize) as u32
+        SuffixIdx(self.0.select(idx as usize) as u32)
     }
 
     // Returns an exclusive upper bound on the suffixes with the prefix needle
-    fn upper_bound<T>(&self, needle: T) -> u32
+    pub fn upper_bound<T>(&self, needle: T) -> SuffixIdx
     where
         T: AsRef<[u8]>,
     {
@@ -213,7 +214,7 @@ impl CompressedTrigramPointers {
             [a] => u32::from_be_bytes([0, 0, 0, *a]).saturating_add(1) << 16,
             [] => self.0.len() as u32,
         };
-        self.0.select(idx as usize) as u32
+        SuffixIdx(self.0.select(idx as usize) as u32)
     }
 
     pub fn serialize_into<W: std::io::Write>(

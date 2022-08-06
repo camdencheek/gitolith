@@ -171,7 +171,9 @@ impl CachedSuffixes {
         }
 
         let (start, end) = prefix_range.into_inner();
-        self.lookup_prefix_start(start, start_bounds)..self.lookup_prefix_end(end, end_bounds)
+        let start_bound = self.lookup_prefix_start(start, start_bounds);
+        let end_bound = self.lookup_prefix_end(&end, start_bound..trigrams.upper_bound(&end));
+        start_bound..end_bound
     }
 
     fn lookup_prefix_start<T>(&self, prefix: T, bounds: Range<SuffixIdx>) -> SuffixIdx
@@ -184,22 +186,24 @@ impl CachedSuffixes {
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
             let block = self.read_block(block_id);
             let content_idx = block.0[offset];
-            let doc_id = doc_ends.find(content_idx);
-            // TODO this is not strictly correct for documents with null bytes.
-            // In order to do this lookup correctly, we need to potentially
-            // compare across multiple documents.
-            let doc_content = self.docs.read_content(doc_id, &doc_ends);
-            let doc_content_range = doc_ends.content_range(doc_id);
-            let prefix_slice: &[u8] = prefix.as_ref();
-            let content_end = usize::from(doc_content_range.end)
-                .min(usize::from(content_idx) + prefix_slice.len());
-            let content = &doc_content[usize::from(content_idx)
-                - u32::from(doc_content_range.start) as usize
-                ..content_end - u32::from(doc_content_range.start) as usize];
-            // TODO up until here, all the logic is the same as lookup_prefix_end.
-            // We can probably both deduplicate and run the lookups at the same time
-            // to avoid the cost of re-fetching the blocks and content
-            return content < prefix_slice;
+
+            let mut prefix_slice: &[u8] = prefix.as_ref();
+            let contents = ContiguousContentIterator::new(
+                &self.docs,
+                &doc_ends,
+                content_idx..content_idx + ContentIdx(prefix_slice.len() as u32),
+            );
+
+            for (doc_content, slicer) in contents {
+                let content = &doc_content[slicer];
+                let (left, right) = prefix_slice.split_at(content.len());
+                prefix_slice = right;
+                if content < left {
+                    return true;
+                }
+            }
+            // prefix is equal
+            return false;
         };
         self.find_suffix_idx(pred, Some(bounds))
     }
@@ -214,19 +218,24 @@ impl CachedSuffixes {
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
             let block = self.read_block(block_id);
             let content_idx = block.0[offset];
-            let doc_id = doc_ends.find(content_idx);
-            let doc_content = self.docs.read_content(doc_id, &doc_ends);
-            let doc_content_range = doc_ends.content_range(doc_id);
-            let prefix_slice: &[u8] = prefix.as_ref();
-            let content_end = usize::from(doc_content_range.end)
-                .min(usize::from(content_idx) + prefix_slice.len());
-            let content = &doc_content[usize::from(content_idx)
-                - u32::from(doc_content_range.start) as usize
-                ..content_end - u32::from(doc_content_range.start) as usize];
-            // TODO up until here, all the logic is the same as lookup_prefix_end.
-            // We can probably both deduplicate and run the lookups at the same time
-            // to avoid the cost of re-fetching the blocks and content
-            return content <= prefix_slice;
+
+            let mut prefix_slice: &[u8] = prefix.as_ref();
+            let contents = ContiguousContentIterator::new(
+                &self.docs,
+                &doc_ends,
+                content_idx..content_idx + ContentIdx(prefix_slice.len() as u32),
+            );
+
+            for (doc_content, slicer) in contents {
+                let content = &doc_content[slicer];
+                let (left, right) = prefix_slice.split_at(content.len());
+                prefix_slice = right;
+                if content < left {
+                    return true;
+                }
+            }
+            // prefix is equal
+            return true;
         };
         self.find_suffix_idx(pred, Some(bounds))
     }
@@ -288,6 +297,55 @@ impl CachedSuffixes {
         match value {
             CacheValue::TrigramPointers(tp) => tp,
             _ => unimplemented!(),
+        }
+    }
+}
+
+// TODO AsRef<> instead of lifetimes here?
+struct ContiguousContentIterator<'a, 'b> {
+    docs: &'a CachedDocs,
+    doc_ends: &'b Arc<DocEnds>,
+    range: Range<ContentIdx>,
+}
+
+impl<'a, 'b> ContiguousContentIterator<'a, 'b> {
+    pub fn new(docs: &'a CachedDocs, doc_ends: &'b Arc<DocEnds>, range: Range<ContentIdx>) -> Self {
+        Self {
+            docs,
+            doc_ends,
+            range,
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for ContiguousContentIterator<'a, 'b> {
+    type Item = (Arc<Vec<u8>>, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.range.end - self.range.start == ContentIdx(0) {
+            return None;
+        }
+
+        let next_doc_id = self.doc_ends.find(self.range.start);
+        let next_doc_range = self.doc_ends.content_range(next_doc_id);
+        let doc_content = self.docs.read_content(next_doc_id, self.doc_ends);
+
+        if next_doc_range.end < self.range.end {
+            let res = Some((
+                doc_content,
+                usize::from(self.range.start) - usize::from(next_doc_range.start)
+                    ..usize::from(next_doc_range.end) - usize::from(next_doc_range.start),
+            ));
+            self.range.start = next_doc_range.end;
+            res
+        } else {
+            let res = Some((
+                doc_content,
+                usize::from(self.range.start) - usize::from(next_doc_range.start)
+                    ..usize::from(self.range.end) - usize::from(next_doc_range.start),
+            ));
+            self.range.start = self.range.end;
+            res
         }
     }
 }
