@@ -37,13 +37,8 @@ pub fn search_regex<'a>(
     skip_index: bool,
     scope: &'a rayon::ScopeFifo,
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
-    let re = Regex::new(query)?;
-    let ast = regex_syntax::ast::parse::Parser::new()
-        .parse(re.as_str())
-        .expect("regex str failed to parse as AST");
-    let hir = regex_syntax::hir::translate::Translator::new()
-        .translate(re.as_str(), &ast)
-        .expect("regex str failed to parse for translator");
+    let ast = regex_syntax::ast::parse::Parser::new().parse(&query)?;
+    let hir = regex_syntax::hir::translate::Translator::new().translate(&query, &ast)?;
 
     let mut extracted = if skip_index {
         ExtractedRegexLiterals::None
@@ -57,6 +52,7 @@ pub fn search_regex<'a>(
 
     match extracted {
         ExtractedRegexLiterals::None => {
+            let re = Regex::new(query)?;
             let doc_ends = s.docs().read_doc_ends();
             let suffixes = s.suffixes();
             let re = Arc::new(re);
@@ -107,6 +103,7 @@ pub fn search_regex<'a>(
             Ok(Box::new(ExactDocIter::new(s.docs(), content_indexes)))
         }
         ExtractedRegexLiterals::Inexact(all) => {
+            let re = Regex::new(query)?;
             let doc_ends = s.docs().read_doc_ends();
             let suffixes = s.suffixes();
             let doc_ids = s.docs().doc_ids();
