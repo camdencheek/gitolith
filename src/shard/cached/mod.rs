@@ -306,7 +306,6 @@ impl CachedSuffixes {
     }
 }
 
-// TODO AsRef<> instead of lifetimes here?
 struct ContiguousContentIterator<'a, 'b> {
     docs: &'a CachedDocs,
     doc_ends: &'b Arc<DocEnds>,
@@ -338,16 +337,16 @@ impl<'a, 'b> Iterator for ContiguousContentIterator<'a, 'b> {
         if next_doc_range.end < self.range.end {
             let res = Some((
                 doc_content,
-                usize::from(self.range.start) - usize::from(next_doc_range.start)
-                    ..usize::from(next_doc_range.end) - usize::from(next_doc_range.start),
+                usize::from(self.range.start - next_doc_range.start)
+                    ..usize::from(next_doc_range.end - next_doc_range.start),
             ));
             self.range.start = next_doc_range.end;
             res
         } else {
             let res = Some((
                 doc_content,
-                usize::from(self.range.start) - usize::from(next_doc_range.start)
-                    ..usize::from(self.range.end) - usize::from(next_doc_range.start),
+                usize::from(self.range.start - next_doc_range.start)
+                    ..usize::from(self.range.end - next_doc_range.start),
             ));
             self.range.start = self.range.end;
             res

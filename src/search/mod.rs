@@ -79,11 +79,11 @@ pub fn search_regex<'a>(
         }
         ExtractedRegexLiterals::Exact(set) => {
             let suffixes = s.suffixes();
+            assert!(set.len() < 4096, "this should have optimized away");
             let suf_ranges: Vec<(Range<SuffixIdx>, usize)> =
                 SuffixRangeIterator::new(set, suffixes.clone())
                     .filter(|(suf_range, _)| suf_range.start != suf_range.end)
                     .collect();
-            assert!(suf_ranges.len() < 4096, "this should have optimized away");
             let content_idx_count = suf_ranges
                 .iter()
                 .map(|(range, _)| u32::from(range.end - range.start) as usize)
