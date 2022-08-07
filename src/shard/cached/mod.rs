@@ -178,8 +178,12 @@ impl CachedSuffixes {
         T: AsRef<[u8]>,
     {
         let doc_ends = self.docs.read_doc_ends();
+        let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
+
         let pred = |suffix_idx| {
-            // TODO we can probably improve perf here by holding onto the last block or two
+            // TODO we can probably improve perf here by holding onto the last block or two.
+            // However, this might also confuse the cache metrics. Benchmark this
+            // once we have exact matching.
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
             let block = self.read_block(block_id);
             let content_idx = block.0[offset];
@@ -374,7 +378,7 @@ impl SuffixRangeIterator {
 }
 
 impl Iterator for SuffixRangeIterator {
-    type Item = Range<SuffixIdx>;
+    type Item = (Range<SuffixIdx>, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let state = self.states.next()?;
@@ -383,10 +387,13 @@ impl Iterator for SuffixRangeIterator {
         self.range_set
             .write_state_to(state, &mut self.start_buf, &mut self.end_buf);
 
-        Some(
+        debug_assert!(self.start_buf.len() == self.end_buf.len());
+
+        Some((
             self.suffixes
                 .lookup_prefix_range(&self.trigrams, &self.start_buf..=&self.end_buf),
-        )
+            self.start_buf.len(),
+        ))
     }
 }
 

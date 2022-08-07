@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::os::unix::prelude::FileExt;
 use std::sync::Arc;
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash)]
+#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Ord, Hash)]
 pub struct ContentIdx(pub u32);
 
 impl From<ContentIdx> for usize {

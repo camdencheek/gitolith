@@ -1,8 +1,9 @@
 use anyhow::Error;
 use bitvec::{self, vec::BitVec};
 use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
+use rayon::slice::*;
 use std::io::{self, Write};
-use std::iter::Cycle;
+use std::iter::{Cycle, Peekable};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -50,10 +51,6 @@ pub fn search_regex<'a>(
         extract_regex_literals(hir)
     };
 
-    extracted = match extracted {
-        ExtractedRegexLiterals::Exact(e) => ExtractedRegexLiterals::Inexact(vec![e]),
-        _ => extracted,
-    };
     // dbg!(&extracted);
     extracted = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
     // dbg!(&extracted);
@@ -85,7 +82,29 @@ pub fn search_regex<'a>(
             ))
         }
         ExtractedRegexLiterals::Exact(set) => {
-            todo!()
+            let suffixes = s.suffixes();
+            let suf_ranges: Vec<(Range<SuffixIdx>, usize)> =
+                SuffixRangeIterator::new(set, suffixes.clone())
+                    .filter(|(suf_range, _)| suf_range.start != suf_range.end)
+                    .collect();
+            assert!(suf_ranges.len() < 4096, "this should have optimized away");
+            let content_idx_count = suf_ranges
+                .iter()
+                .map(|(range, _)| u32::from(range.end - range.start) as usize)
+                .sum();
+            if content_idx_count > (1 << 15) {
+                // Fall back to normal inexact search
+                todo!("implement inexact fallback for large result sets");
+            }
+            let mut content_indexes: Vec<(ContentIdx, usize)> =
+                Vec::with_capacity(content_idx_count);
+            for (range, len) in suf_ranges.into_iter() {
+                for content_idx in ContentIdxIterator::new(range, suffixes.clone()) {
+                    content_indexes.push((content_idx, len));
+                }
+            }
+            content_indexes.par_sort_by_key(|(idx, _)| idx.clone());
+            Ok(Box::new(ExactDocIter::new(s.docs(), content_indexes)))
         }
         ExtractedRegexLiterals::Inexact(all) => {
             let doc_ends = s.docs().read_doc_ends();
@@ -99,6 +118,7 @@ pub fn search_regex<'a>(
                 .map(|suf_range_iter| {
                     let suffixes = s.suffixes();
                     suf_range_iter
+                        .map(|(suf_range, len)| suf_range)
                         .filter(|suf_range| suf_range.start != suf_range.end)
                         .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes.clone()))
                         .flatten()
@@ -124,6 +144,57 @@ pub fn search_regex<'a>(
                 .filter(|doc_match| doc_match.matches.len() > 0);
             Ok(Box::new(filtered))
         }
+    }
+}
+
+struct ExactDocIter {
+    matched_indexes: Peekable<<Vec<(ContentIdx, usize)> as IntoIterator>::IntoIter>,
+    doc_ends: Arc<DocEnds>,
+    docs: CachedDocs,
+}
+
+impl ExactDocIter {
+    fn new(docs: CachedDocs, matched_indexes: Vec<(ContentIdx, usize)>) -> Self {
+        Self {
+            doc_ends: docs.read_doc_ends(),
+            docs,
+            matched_indexes: matched_indexes.into_iter().peekable(),
+        }
+    }
+}
+
+impl Iterator for ExactDocIter {
+    type Item = DocMatch;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first_index, first_len) = self.matched_indexes.next()?;
+        let doc_id = self.doc_ends.find(first_index);
+        let doc_range = self.doc_ends.content_range(doc_id);
+
+        let mut res = DocMatch {
+            id: doc_id,
+            matches: Vec::with_capacity(1),
+            content: self.docs.read_content(doc_id, &self.doc_ends),
+        };
+
+        let mut add_match = |idx: ContentIdx, len: usize| {
+            let start = u32::from(idx - doc_range.start);
+            let end = start + len as u32;
+            // Filter out matches that cross doc boundaries
+            if end <= u32::from(doc_range.end) {
+                res.matches.push(start..end);
+            }
+        };
+        add_match(first_index, first_len);
+
+        while let Some((idx, len)) = self
+            .matched_indexes
+            .next_if(|(idx, _)| *idx < doc_range.end)
+        {
+            add_match(idx, len);
+        }
+
+        Some(res)
     }
 }
 
@@ -471,7 +542,9 @@ fn optimize_extracted(
     match extracted {
         // We don't handle exact matches specially right now,
         // so just optimize it as inexact.
-        Exact(set) => optimize_inexact_literals(vec![set], trigrams),
+        // Exact(set) => optimize_inexact_literals(vec![set], trigrams),
+        // TODO make sure exact doesn't get too long.
+        Exact(set) => Exact(set),
         Inexact(sets) => optimize_inexact_literals(sets, trigrams),
         None => None,
     }
@@ -592,16 +665,16 @@ mod test {
     #[test]
     fn test_regex() {
         let shard = build_shard();
-        // assert_count(shard.clone(), r"doc", 2);
-        // assert_count(shard.clone(), r"another", 1);
-        // assert_count(shard.clone(), r"needle", 3);
-        // assert_count(shard.clone(), r"ne.*ed.*le", 2);
-        // assert_count(shard.clone(), r"ne.*?ed.*?le", 3);
-        // assert_count(shard.clone(), r"(?i)needle", 4);
-        // assert_count(shard.clone(), r"(?i)ne\w*ed\w*le", 4);
-        // assert_count(shard.clone(), r".*", 7);
-        // assert_count(shard.clone(), r"(?s).*", 6);
-        // assert_count(shard.clone(), r"\w+", 15);
+        assert_count(shard.clone(), r"doc", 2);
+        assert_count(shard.clone(), r"another", 1);
+        assert_count(shard.clone(), r"needle", 3);
+        assert_count(shard.clone(), r"ne.*ed.*le", 2);
+        assert_count(shard.clone(), r"ne.*?ed.*?le", 3);
+        assert_count(shard.clone(), r"(?i)needle", 4);
+        assert_count(shard.clone(), r"(?i)ne\w*ed\w*le", 4);
+        assert_count(shard.clone(), r".*", 7);
+        assert_count(shard.clone(), r"(?s).*", 6);
+        assert_count(shard.clone(), r"\w+", 15);
         assert_count(shard.clone(), "(?i)contains case sensitive", 1);
     }
 }
