@@ -4,10 +4,20 @@ use crate::shard::docs::{CompressedDocEnds, DocEnds, DocID};
 use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID};
 use crate::shard::ShardID;
 
-use stretto::{Cache as StrettoCache, Coster, TransparentKey, TransparentKeyBuilder};
+use stretto::{
+    Cache as StrettoCache, Coster, DefaultCacheCallback, DefaultUpdateValidator, TransparentKey,
+    TransparentKeyBuilder,
+};
 
-pub type Cache =
-    StrettoCache<CacheKey, CacheValue, TransparentKeyBuilder<CacheKey>, CacheValueCoster>;
+pub type Cache = StrettoCache<
+    CacheKey,
+    CacheValue,
+    TransparentKeyBuilder<CacheKey>,
+    CacheValueCoster,
+    DefaultUpdateValidator<CacheValue>,
+    DefaultCacheCallback<CacheValue>,
+    fnv::FnvBuildHasher,
+>;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 pub enum CacheKey {
@@ -80,6 +90,7 @@ pub fn new_cache(max_capacity: u64) -> Cache {
     StrettoCache::builder(10_000, max_capacity as i64)
         .set_coster(CacheValueCoster())
         .set_key_builder(TransparentKeyBuilder::default())
+        .set_hasher(fnv::FnvBuildHasher::default())
         .finalize()
         .unwrap()
 }
