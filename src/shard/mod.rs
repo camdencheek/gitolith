@@ -19,6 +19,12 @@ use std::sync::Arc;
 #[derive(Copy, Clone, From, Into, Add, Sub, PartialEq, Eq, Hash, Debug)]
 pub struct ShardID(pub u16);
 
+impl From<ShardID> for u64 {
+    fn from(shard_id: ShardID) -> Self {
+        shard_id.0 as u64
+    }
+}
+
 #[derive(Clone)]
 pub struct Shard {
     pub header: ShardHeader,

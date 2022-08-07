@@ -23,6 +23,12 @@ impl From<DocID> for usize {
     }
 }
 
+impl From<DocID> for u64 {
+    fn from(doc_id: DocID) -> Self {
+        doc_id.0 as u64
+    }
+}
+
 impl DocID {
     pub fn new(id: u32) -> Self {
         Self(id)

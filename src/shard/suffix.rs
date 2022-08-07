@@ -21,6 +21,12 @@ pub struct SuffixIdx(pub u32);
 )]
 pub struct SuffixBlockID(pub u32);
 
+impl From<SuffixBlockID> for u64 {
+    fn from(block_id: SuffixBlockID) -> Self {
+        block_id.0 as u64
+    }
+}
+
 #[derive(Debug)]
 pub struct SuffixBlock(pub [ContentIdx; Self::SIZE_SUFFIXES]);
 

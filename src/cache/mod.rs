@@ -4,9 +4,10 @@ use crate::shard::docs::{CompressedDocEnds, DocEnds, DocID};
 use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID};
 use crate::shard::ShardID;
 
-use stretto::{Cache as StrettoCache, Coster, DefaultKeyBuilder};
+use stretto::{Cache as StrettoCache, Coster, TransparentKey, TransparentKeyBuilder};
 
-pub type Cache = StrettoCache<CacheKey, CacheValue, DefaultKeyBuilder<CacheKey>, CacheValueCoster>;
+pub type Cache =
+    StrettoCache<CacheKey, CacheValue, TransparentKeyBuilder<CacheKey>, CacheValueCoster>;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 pub enum CacheKey {
@@ -14,6 +15,35 @@ pub enum CacheKey {
     DocContent(ShardID, DocID),
     SuffixBlock(ShardID, SuffixBlockID),
     TrigramPointers(ShardID),
+}
+
+// Implemented to satisfy TransparentKeyBuilder. Do not actually use this
+// because the value returned is meaningless.
+impl Default for CacheKey {
+    fn default() -> Self {
+        Self::DocEnds(ShardID(0))
+    }
+}
+
+impl TransparentKey for CacheKey {
+    fn to_u64(&self) -> u64 {
+        use CacheKey::*;
+        // First four bits are reserved for the key type.
+        // Remaining are available to use for uniqueness
+        // within the key. Conflicts are okay, but should
+        // be avoided if possible.
+        match self {
+            DocEnds(shard_id) => (0 << 60) + u64::from(*shard_id),
+            DocContent(shard_id, doc_id) => {
+                (1 << 60) + (u64::from(*shard_id) << 32) + u64::from(*doc_id)
+            }
+
+            SuffixBlock(shard_id, block_id) => {
+                (2 << 60) + (u64::from(*shard_id) << 32) + u64::from(*block_id)
+            }
+            TrigramPointers(shard_id) => (3 << 60) + (u64::from(*shard_id) << 32),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +79,7 @@ pub fn new_cache(max_capacity: u64) -> Cache {
     // TODO tune num_counters
     StrettoCache::builder(10_000, max_capacity as i64)
         .set_coster(CacheValueCoster())
+        .set_key_builder(TransparentKeyBuilder::default())
         .finalize()
         .unwrap()
 }
