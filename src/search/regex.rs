@@ -92,15 +92,15 @@ impl LiteralSet {
         use LiteralSet::*;
 
         match self {
-            Byte(b) => pointers.as_ref().selectivity([*b]..=[*b]),
+            Byte(b) => pointers.selectivity([*b]..=[*b]),
             Unicode(c) => {
                 let mut dst = [0u8; 4];
                 let encoded = c.encode_utf8(&mut dst);
-                pointers.as_ref().selectivity(&encoded..=&encoded)
+                pointers.selectivity(&encoded..=&encoded)
             }
             ByteClass(v) => v
                 .iter()
-                .map(|c| pointers.as_ref().selectivity([c.start()]..=[c.end()]))
+                .map(|c| pointers.selectivity([c.start()]..=[c.end()]))
                 .sum(),
             UnicodeClass(v) => v
                 .iter()
@@ -109,7 +109,7 @@ impl LiteralSet {
                     let start = c.start().encode_utf8(&mut start_buf);
                     let mut end_buf = [0u8; 4];
                     let end = c.end().encode_utf8(&mut end_buf);
-                    pointers.as_ref().selectivity(&start..=&end)
+                    pointers.selectivity(&start..=&end)
                 })
                 .sum(),
             Alternation(v) => v.iter().map(|ps| ps.selectivity(&pointers)).sum(),
@@ -214,6 +214,8 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
                 }
                 env.current.push(LiteralSet::Alternation(alt_iters))
             }
+            // TODO we can get some useful information from "one or more" repetitions
+            // because we can add the first guaranteed char.
             _ => env.cannot_handle(),
         }
     };
@@ -286,7 +288,8 @@ fn split_unicode_ranges(ranges: &[hir::ClassUnicodeRange]) -> Vec<hir::ClassUnic
 
     ranges
         .iter()
+        .cloned()
         .cartesian_product(sized_ranges.into_iter())
-        .filter_map(|(left, right)| intersect(*left, right))
+        .filter_map(|(left, right)| intersect(left, right))
         .collect()
 }
