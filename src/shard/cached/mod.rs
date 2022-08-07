@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     cache::{Cache, CacheKey, CacheValue},
-    search::regex::PrefixRangeSet,
+    search::regex::ConcatLiteralSet,
 };
 
 use super::{
@@ -356,7 +356,7 @@ impl<'a, 'b> Iterator for ContiguousContentIterator<'a, 'b> {
 
 pub struct SuffixRangeIterator {
     states: <Range<usize> as IntoIterator>::IntoIter,
-    range_set: PrefixRangeSet,
+    range_set: ConcatLiteralSet,
     suffixes: CachedSuffixes,
     trigrams: Arc<CompressedTrigramPointers>,
     start_buf: Vec<u8>,
@@ -364,9 +364,9 @@ pub struct SuffixRangeIterator {
 }
 
 impl SuffixRangeIterator {
-    pub fn new(range_set: PrefixRangeSet, suffixes: CachedSuffixes) -> Self {
+    pub fn new(range_set: ConcatLiteralSet, suffixes: CachedSuffixes) -> Self {
         Self {
-            states: (0..range_set.len()).into_iter(),
+            states: (0..range_set.cardinality()).into_iter(),
             range_set,
             trigrams: suffixes.read_trigram_pointers(),
             suffixes,

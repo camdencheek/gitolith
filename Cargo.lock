@@ -357,6 +357,7 @@ dependencies = [
  "rayon",
  "regex",
  "regex-syntax 0.6.27",
+ "streaming-iterator",
  "stretto",
  "sucds",
  "suffix",
@@ -822,6 +823,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4817bfdf8f0b576330b83b55bed0ec89204aa7da62c2fa11fad2119f33a70014"
 
 [[package]]
 name = "stretto"

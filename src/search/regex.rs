@@ -9,35 +9,37 @@ use crate::shard::suffix::CompressedTrigramPointers;
 
 #[derive(Clone, Debug)]
 pub enum ExtractedRegexLiterals {
-    // An exact extraction indicates that every prefix yielded by the iterator is an exact match to
-    // the input regex pattern and does not need to be rechecked with the original regex pattern.
-    Exact(PrefixRangeSet),
+    /// An exact extraction indicates that every prefix yielded by the iterator is an exact match to
+    /// the input regex pattern and does not need to be rechecked with the original regex pattern as
+    /// long as it doesn't cross any document boundaries.
+    Exact(ConcatLiteralSet),
 
-    // An inexact extraction requires any matched document to be rechecked. It guarantees that the
-    // only documents that can possibly match the original regex query will contain at least one of
-    // the prefixes from each of the iterators.
-    //
-    // As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
-    // Inexact(vec![[abc..abd], [efg..efh]])
-    Inexact(Vec<PrefixRangeSet>),
+    /// An inexact extraction requires any matched document to be rechecked. It guarantees that the
+    /// only documents that can possibly match the original regex query will contain at least one of
+    /// the prefixes from each of the iterators.
+    ///
+    /// As an example, the regex query /ab(c|d).*ef(g|h)/ will yield something like
+    /// Inexact(vec![[abc..abd], [efg..efh]])
+    Inexact(Vec<ConcatLiteralSet>),
 
-    // If no meaningful literals can be extracted from the regex pattern, like /.*/,
-    // the result of extraction will be None.
+    /// If no meaningful literals can be extracted from the regex pattern, like /.*/,
+    /// the result of extraction will be None.
     None,
 }
 
+/// A concatenation of LiteralSets.
 #[derive(Clone, Debug)]
-pub struct PrefixRangeSet(Vec<LiteralSet>);
+pub struct ConcatLiteralSet(Vec<LiteralSet>);
 
-impl PrefixRangeSet {
+impl ConcatLiteralSet {
     pub fn new(concat: Vec<LiteralSet>) -> Self {
         Self(concat)
     }
 
-    // Len is the number of prefix ranges represented by this PrefixRangeSet.
-    // The i-th prefix range can be extracted using `write_state_to(i, ...)`.
-    pub fn len(&self) -> usize {
-        self.0.iter().map(LiteralSet::len).product()
+    /// The number of contiguous literal ranges represented by this ConcatLiteralSet.
+    /// The n-th literal range can be extracted using `write_state_to(i, ...)`.
+    pub fn cardinality(&self) -> usize {
+        self.0.iter().map(LiteralSet::cardinality).product()
     }
 
     pub fn selectivity(&self, pointers: &Arc<CompressedTrigramPointers>) -> f64 {
@@ -49,14 +51,14 @@ impl PrefixRangeSet {
     }
 
     pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
-        debug_assert!(state < self.len());
+        debug_assert!(state < self.cardinality());
 
         // TODO document this. Intuition is treating the PrefixRangeSet as a mixed-radix number
         // where digit[i] has base self.0[i].len(). We do this because we don't want to allocate
         // extra and then we can iterate over the states with a single, incrementing usize.
-        let mut place_value = self.len();
+        let mut place_value = self.cardinality();
         for ls in self.0.iter() {
-            place_value /= ls.len();
+            place_value /= ls.cardinality();
             let ls_state = state / place_value;
             state = state % place_value;
             ls.write_state_to(ls_state, start, end);
@@ -70,16 +72,11 @@ pub enum LiteralSet {
     Unicode(char),
     ByteClass(Vec<hir::ClassBytesRange>),
     UnicodeClass(Vec<hir::ClassUnicodeRange>),
-    // TODO: it would be very convenient if we could know that the prefixes we iterate over are
-    // ordered and non-overlapping because then we could use the results of one search to narrow
-    // the results of the following search. Unfortunately, alternations break that invariant
-    // because we don't deduplicate the prefixes of alternations at all. /a(b|b)c/ will yield
-    // two separate but identical ranges.
-    Alternation(Vec<PrefixRangeSet>),
+    Alternation(Vec<ConcatLiteralSet>),
 }
 
 impl LiteralSet {
-    pub fn len(&self) -> usize {
+    pub fn cardinality(&self) -> usize {
         use LiteralSet::*;
 
         match self {
@@ -87,7 +84,7 @@ impl LiteralSet {
             Unicode(c) => 1,
             ByteClass(v) => v.len(),
             UnicodeClass(v) => v.len(),
-            Alternation(v) => v.iter().map(|s| s.len()).sum(),
+            Alternation(v) => v.iter().map(|s| s.cardinality()).sum(),
         }
     }
 
@@ -150,12 +147,12 @@ impl LiteralSet {
             }
             Alternation(v) => {
                 let mut state = state;
-                for prefix_set in v {
-                    if state >= prefix_set.len() {
-                        state -= prefix_set.len();
+                for concat in v {
+                    if state >= concat.cardinality() {
+                        state -= concat.cardinality();
                         continue;
                     }
-                    prefix_set.write_state_to(state, start, end);
+                    concat.write_state_to(state, start, end);
                     break;
                 }
             }
@@ -166,7 +163,7 @@ impl LiteralSet {
 pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
     struct Env {
         current: Vec<LiteralSet>,
-        complete: Vec<PrefixRangeSet>,
+        complete: Vec<ConcatLiteralSet>,
         exact: bool,
     }
 
@@ -178,7 +175,7 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
 
         fn close_current(&mut self) {
             if self.current.len() > 0 {
-                self.complete.push(PrefixRangeSet::new(std::mem::replace(
+                self.complete.push(ConcatLiteralSet::new(std::mem::replace(
                     &mut self.current,
                     Vec::new(),
                 )));
@@ -233,11 +230,11 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
         (0, true) => ExtractedRegexLiterals::None,
         (_, true) => {
             assert!(env.complete.len() == 0);
-            ExtractedRegexLiterals::Exact(PrefixRangeSet::new(env.current))
+            ExtractedRegexLiterals::Exact(ConcatLiteralSet::new(env.current))
         }
         (_, false) => {
             if env.current.len() > 0 {
-                env.complete.push(PrefixRangeSet::new(env.current));
+                env.complete.push(ConcatLiteralSet::new(env.current));
             }
             if env.complete.len() > 0 {
                 ExtractedRegexLiterals::Inexact(env.complete)

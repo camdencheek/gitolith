@@ -20,7 +20,7 @@ use crate::shard::{
     Shard,
 };
 
-use self::regex::{extract_regex_literals, ExtractedRegexLiterals, LiteralSet, PrefixRangeSet};
+use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
 
 pub mod regex;
 
@@ -79,7 +79,7 @@ pub fn search_regex<'a>(
         }
         ExtractedRegexLiterals::Exact(set) => {
             let suffixes = s.suffixes();
-            assert!(set.len() < 4096, "this should have optimized away");
+            assert!(set.cardinality() < 4096, "this should have optimized away");
             let suf_ranges: Vec<(Range<SuffixIdx>, usize)> =
                 SuffixRangeIterator::new(set, suffixes.clone())
                     .filter(|(suf_range, _)| suf_range.start != suf_range.end)
@@ -548,10 +548,10 @@ fn optimize_extracted(
 }
 
 fn optimize_inexact_literals(
-    sets: Vec<PrefixRangeSet>,
+    sets: Vec<ConcatLiteralSet>,
     trigrams: &Arc<CompressedTrigramPointers>,
 ) -> ExtractedRegexLiterals {
-    let mut sets: Vec<PrefixRangeSet> = sets
+    let mut sets: Vec<ConcatLiteralSet> = sets
         .into_iter()
         .map(|set| optimize_prefix_range_set(set, &trigrams))
         .flatten()
@@ -573,11 +573,11 @@ fn optimize_inexact_literals(
 }
 
 fn optimize_prefix_range_set(
-    set: PrefixRangeSet,
+    set: ConcatLiteralSet,
     trigrams: &Arc<CompressedTrigramPointers>,
-) -> Vec<PrefixRangeSet> {
+) -> Vec<ConcatLiteralSet> {
     let max_len = 256;
-    let total_len = set.len();
+    let total_len = set.cardinality();
     if total_len < max_len {
         return vec![set];
     }
@@ -594,7 +594,10 @@ fn optimize_prefix_range_set(
         let mut start = 0;
         for slice_num in 0..num_slices - 1 {
             for end in start + 1..lits.len() {
-                let slice_len: usize = lits[start..end].iter().map(LiteralSet::len).product();
+                let slice_len: usize = lits[start..end]
+                    .iter()
+                    .map(LiteralSet::cardinality)
+                    .product();
                 if slice_len > target_product {
                     res.push(lits[start..end - 1].to_vec());
                     start = end - 1;
@@ -603,11 +606,16 @@ fn optimize_prefix_range_set(
             }
         }
         let last_slice = &lits[start..];
-        if last_slice.iter().map(LiteralSet::len).product::<usize>() > max_len {
+        if last_slice
+            .iter()
+            .map(LiteralSet::cardinality)
+            .product::<usize>()
+            > max_len
+        {
             continue;
         }
         res.push(last_slice.to_vec());
-        return res.into_iter().map(PrefixRangeSet::new).collect();
+        return res.into_iter().map(ConcatLiteralSet::new).collect();
     }
 
     // I'm not 100% convinced the above loop will always terminate, so as
