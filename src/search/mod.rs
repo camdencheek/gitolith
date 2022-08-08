@@ -52,113 +52,202 @@ pub fn search_regex<'a>(
 
     // dbg!(&extracted);
     let optimized = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
-    // dbg!(&extracted);
+    // dbg!(&optimized);
 
     match optimized {
-        OptimizedLiterals::None => {
-            let re = Regex::new(query)?;
-            let doc_ends = s.docs().read_doc_ends();
-            let suffixes = s.suffixes();
-            let re = Arc::new(re);
-            let doc_ids = s.docs().doc_ids();
-            let docs = Arc::new(s.docs());
-            Ok(Box::new(
-                doc_ids
-                    .par_map(scope, 128, move |doc_id| -> DocMatch {
-                        let content = docs.read_content(doc_id, &doc_ends);
-                        let matched_ranges: Vec<Range<u32>> = re
-                            .find_iter(&content)
-                            .map(|m| m.start() as u32..m.end() as u32)
-                            .collect();
-
-                        DocMatch {
-                            id: doc_id,
-                            matches: matched_ranges,
-                            content,
-                        }
-                    })
-                    // TODO would a par_filter_map be more efficient here?
-                    .filter(|doc_match| doc_match.matches.len() > 0),
-            ))
-        }
-        OptimizedLiterals::OrderedExact(set) => {
-            let suffixes = s.suffixes();
-            let suf_ranges: Vec<(Range<SuffixIdx>, usize)> =
-                SuffixRangeIterator::new(set, suffixes.clone())
-                    .filter(|(suf_range, _)| suf_range.start != suf_range.end)
-                    .collect();
-            let content_idx_count = suf_ranges
-                .iter()
-                .map(|(range, _)| u32::from(range.end - range.start) as usize)
-                .sum();
-            if content_idx_count > (1 << 15) {
-                // Fall back to normal inexact search
-                todo!("implement inexact fallback for large result sets");
-            }
-            let mut content_indexes: Vec<(ContentIdx, usize)> =
-                Vec::with_capacity(content_idx_count);
-            for (range, len) in suf_ranges.into_iter() {
-                for content_idx in ContentIdxIterator::new(range, suffixes.clone()) {
-                    content_indexes.push((content_idx, len));
-                }
-            }
-            content_indexes.par_sort_by_key(|(idx, _)| idx.clone());
-            Ok(Box::new(ExactDocIter::new(s.docs(), content_indexes)))
-        }
-        OptimizedLiterals::Inexact(all) => {
-            let re = Regex::new(query)?;
-            let doc_ends = s.docs().read_doc_ends();
-            let suffixes = s.suffixes();
-            let doc_ids = s.docs().doc_ids();
-            let docs = Arc::new(s.docs());
-
-            let content_idx_iters = all
-                .into_iter()
-                .map(|rs| SuffixRangeIterator::new(rs, suffixes.clone()))
-                .map(|suf_range_iter| {
-                    let suffixes = s.suffixes();
-                    suf_range_iter
-                        .map(|(suf_range, len)| suf_range)
-                        .filter(|suf_range| suf_range.start != suf_range.end)
-                        .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes.clone()))
-                        .flatten()
-                })
-                .map(|content_idx_iter| {
-                    ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter)
-                })
-                .collect();
-            let filtered = AndDocIterator::new(content_idx_iters)
-                .par_map(scope, 32, move |doc_id| -> DocMatch {
-                    let content = docs.read_content(doc_id, &doc_ends);
-                    let matched_ranges: Vec<Range<u32>> = re
-                        .find_iter(&content)
-                        .map(|m| m.start() as u32..m.end() as u32)
-                        .collect();
-
-                    DocMatch {
-                        id: doc_id,
-                        matches: matched_ranges,
-                        content,
-                    }
-                })
-                .filter(|doc_match| doc_match.matches.len() > 0);
-            Ok(Box::new(filtered))
-        }
+        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s, scope)),
+        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(query, s, set, scope),
+        OptimizedLiterals::Inexact(all) => Ok(new_inexact_match_iterator(
+            Regex::new(query)?,
+            s,
+            all,
+            scope,
+        )),
     }
 }
 
+fn new_exact_match_iterator<'a>(
+    query: &str,
+    shard: CachedShard,
+    literals: Vec<ConcatLiteralSet>,
+    scope: &'a rayon::ScopeFifo,
+) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
+    let suffixes = shard.suffixes();
+
+    let mut sorted_content_indexes = Vec::with_capacity(literals.len());
+    for concat in &literals {
+        let suf_ranges = SuffixRangeIterator::new(concat.clone(), suffixes.clone())
+            .filter(|(suf_range, _)| suf_range.start != suf_range.end)
+            .collect::<Vec<_>>();
+        let content_idx_count = suf_ranges
+            .iter()
+            .map(|(range, _)| u32::from(range.end - range.start) as usize)
+            .sum();
+        // TODO tune this. Collecting the indexes in memory and sorting them
+        // could be catastrophically expensive for common patterns.
+        if content_idx_count > (1 << 15) {
+            return Ok(new_inexact_match_iterator(
+                Regex::new(query)?,
+                shard,
+                literals,
+                scope,
+            ));
+        }
+        let mut content_indexes: Vec<(ContentIdx, usize)> = Vec::with_capacity(content_idx_count);
+        for (range, len) in suf_ranges.into_iter() {
+            for content_idx in ContentIdxIterator::new(range, suffixes.clone()) {
+                content_indexes.push((content_idx, len));
+            }
+        }
+        content_indexes.par_sort_by_key(|(idx, _)| idx.clone());
+        sorted_content_indexes.push(content_indexes);
+    }
+
+    Ok(Box::new(ExactDocIter::new(
+        shard.docs(),
+        sorted_content_indexes,
+    )))
+}
+
+fn new_inexact_match_iterator<'a>(
+    re: Regex,
+    shard: CachedShard,
+    literals: Vec<ConcatLiteralSet>,
+    scope: &'a rayon::ScopeFifo,
+) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
+    let doc_ends = shard.docs().read_doc_ends();
+    let suffixes = shard.suffixes();
+    let doc_ids = shard.docs().doc_ids();
+    let docs = Arc::new(shard.docs());
+
+    let content_idx_iters = literals
+        .into_iter()
+        .map(|rs| SuffixRangeIterator::new(rs, suffixes.clone()))
+        .map(|suf_range_iter| {
+            let suffixes = shard.suffixes();
+            suf_range_iter
+                .map(|(suf_range, len)| suf_range)
+                .filter(|suf_range| suf_range.start != suf_range.end)
+                .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes.clone()))
+                .flatten()
+        })
+        .map(|content_idx_iter| ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter))
+        .collect();
+    let filtered = AndDocIterator::new(content_idx_iters)
+        .par_map(scope, 32, move |doc_id| -> DocMatch {
+            let content = docs.read_content(doc_id, &doc_ends);
+            let matched_ranges: Vec<Range<u32>> = re
+                .find_iter(&content)
+                .map(|m| m.start() as u32..m.end() as u32)
+                .collect();
+
+            DocMatch {
+                id: doc_id,
+                matches: matched_ranges,
+                content,
+            }
+        })
+        .filter(|doc_match| doc_match.matches.len() > 0);
+    Box::new(filtered)
+}
+
+fn new_unindexed_match_iterator<'a>(
+    re: Regex,
+    shard: CachedShard,
+    scope: &'a rayon::ScopeFifo,
+) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
+    let suffixes = shard.suffixes();
+    let doc_ends = shard.docs().read_doc_ends();
+    let doc_ids = shard.docs().doc_ids();
+    let re = Arc::new(re);
+    let docs = Arc::new(shard.docs());
+    Box::new(
+        doc_ids
+            .par_map(scope, 128, move |doc_id| -> DocMatch {
+                let content = docs.read_content(doc_id, &doc_ends);
+                let matched_ranges: Vec<Range<u32>> = re
+                    .find_iter(&content)
+                    .map(|m| m.start() as u32..m.end() as u32)
+                    .collect();
+
+                DocMatch {
+                    id: doc_id,
+                    matches: matched_ranges,
+                    content,
+                }
+            })
+            // TODO would a par_filter_map be more efficient here?
+            .filter(|doc_match| doc_match.matches.len() > 0),
+    )
+}
+
 struct ExactDocIter {
-    matched_indexes: Peekable<<Vec<(ContentIdx, usize)> as IntoIterator>::IntoIter>,
+    matched_indexes: Vec<Vec<(ContentIdx, usize)>>,
+    cursors: Vec<usize>,
     doc_ends: Arc<DocEnds>,
     docs: CachedDocs,
 }
 
 impl ExactDocIter {
-    fn new(docs: CachedDocs, matched_indexes: Vec<(ContentIdx, usize)>) -> Self {
+    fn new(docs: CachedDocs, matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
         Self {
             doc_ends: docs.read_doc_ends(),
             docs,
-            matched_indexes: matched_indexes.into_iter().peekable(),
+            cursors: vec![0; matched_indexes.len()],
+            matched_indexes,
+        }
+    }
+
+    /// Returns the total length
+    fn has_successor(&mut self, location: ContentIdx, len: usize, index: usize) -> (bool, usize) {
+        if index == self.cursors.len() - 1 {
+            return (true, len);
+        }
+
+        let cursor = self.cursors[index + 1];
+        let v = &self.matched_indexes[index + 1];
+        for i in cursor..v.len() {
+            if v[i].0 <= location {
+                self.cursors[index + 1] = i;
+                continue;
+            }
+
+            if v[i].0 > location + ContentIdx(len as u32) {
+                return (false, 0);
+            }
+
+            if v[i].0 == location + ContentIdx(len as u32) {
+                let (ok, l) = self.has_successor(v[i].0, v[i].1, index + 1);
+                if ok {
+                    return (true, len + l);
+                }
+                break;
+            }
+        }
+        return (false, 0);
+    }
+
+    fn next_candidate(&mut self) -> Option<(ContentIdx, usize)> {
+        let i = self.cursors[0];
+        let v = &self.matched_indexes[0];
+        if i >= v.len() {
+            None
+        } else {
+            self.cursors[0] += 1;
+            Some(v[i])
+        }
+    }
+
+    fn next_candidate_in(&mut self, end: ContentIdx) -> Option<(ContentIdx, usize)> {
+        let i = self.cursors[0];
+        let v = &self.matched_indexes[0];
+        if i >= v.len() {
+            None
+        } else if v[i].0 >= end {
+            None
+        } else {
+            self.cursors[0] += 1;
+            Some(v[i])
         }
     }
 }
@@ -167,7 +256,7 @@ impl Iterator for ExactDocIter {
     type Item = DocMatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (first_index, first_len) = self.matched_indexes.next()?;
+        let (first_index, first_len) = self.next_candidate()?;
         let doc_id = self.doc_ends.find(first_index);
         let doc_range = self.doc_ends.content_range(doc_id);
 
@@ -187,11 +276,11 @@ impl Iterator for ExactDocIter {
         };
         add_match(first_index, first_len);
 
-        while let Some((idx, len)) = self
-            .matched_indexes
-            .next_if(|(idx, _)| *idx < doc_range.end)
-        {
-            add_match(idx, len);
+        while let Some((idx, len)) = self.next_candidate_in(doc_range.end) {
+            match self.has_successor(idx, len, 0) {
+                (true, l) => add_match(idx, l),
+                _ => {}
+            }
         }
 
         Some(res)
