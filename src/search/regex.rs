@@ -57,11 +57,11 @@ impl ConcatLiteralSet {
         // where digit[i] has base self.0[i].len(). We do this because we don't want to allocate
         // extra and then we can iterate over the states with a single, incrementing usize.
         let mut place_value = self.cardinality();
-        for ls in self.0.iter() {
-            place_value /= ls.cardinality();
-            let ls_state = state / place_value;
+        for set in self.0.iter() {
+            place_value /= set.cardinality();
+            let digit = state / place_value;
             state = state % place_value;
-            ls.write_state_to(ls_state, start, end);
+            set.write_state_to(digit, start, end);
         }
     }
 }

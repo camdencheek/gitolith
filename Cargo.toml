@@ -23,7 +23,7 @@ bitvec = "1.0.1"
 stretto = "0.6.2"
 bytefmt = "0.1.7"
 fnv = "1.0.7"
-streaming-iterator = {version = "0.1.6", features = ["std"]}
+streaming-iterator = { version = "0.1.6", features = ["std"]}
 
 [profile.release]
 debug = true
