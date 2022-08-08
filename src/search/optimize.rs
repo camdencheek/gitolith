@@ -11,10 +11,7 @@ pub enum OptimizedLiterals {
     None,
 }
 
-pub fn optimize_extracted(
-    extracted: ExtractedRegexLiterals,
-    trigrams: &Arc<CompressedTrigramPointers>,
-) -> OptimizedLiterals {
+pub fn optimize_extracted(extracted: ExtractedRegexLiterals) -> OptimizedLiterals {
     use ExtractedRegexLiterals::*;
 
     match extracted {

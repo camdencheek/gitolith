@@ -50,10 +50,7 @@ pub fn search_regex<'a>(
         extract_regex_literals(hir)
     };
 
-    // dbg!(&extracted);
-    let optimized = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
-    // dbg!(&optimized);
-
+    let optimized = optimize_extracted(extracted);
     match optimized {
         OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s, scope)),
         OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(query, s, set, scope),
