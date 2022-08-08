@@ -582,7 +582,7 @@ fn optimize_prefix_range_set(
         return vec![set];
     }
 
-    let lits = set.literals();
+    let lits = set.sets();
     let mut res = Vec::new();
     for num_slices in 2..lits.len() {
         res.clear();

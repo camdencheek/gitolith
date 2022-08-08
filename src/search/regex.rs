@@ -46,11 +46,11 @@ impl ConcatLiteralSet {
         self.0.iter().map(|ls| ls.selectivity(&pointers)).product()
     }
 
-    pub fn literals(&self) -> &[LiteralSet] {
+    pub fn sets(&self) -> &[LiteralSet] {
         self.0.as_ref()
     }
 
-    pub fn write_state_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
+    pub fn write_nth_literal_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
         debug_assert!(state < self.cardinality());
 
         // TODO document this. Intuition is treating the PrefixRangeSet as a mixed-radix number
@@ -152,7 +152,7 @@ impl LiteralSet {
                         state -= concat.cardinality();
                         continue;
                     }
-                    concat.write_state_to(state, start, end);
+                    concat.write_nth_literal_to(state, start, end);
                     break;
                 }
             }

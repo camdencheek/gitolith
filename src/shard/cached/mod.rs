@@ -384,7 +384,7 @@ impl Iterator for SuffixRangeIterator {
         self.start_buf.clear();
         self.end_buf.clear();
         self.range_set
-            .write_state_to(state, &mut self.start_buf, &mut self.end_buf);
+            .write_nth_literal_to(state, &mut self.start_buf, &mut self.end_buf);
 
         debug_assert!(self.start_buf.len() == self.end_buf.len());
 
