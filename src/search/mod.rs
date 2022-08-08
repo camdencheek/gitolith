@@ -25,7 +25,7 @@ use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLitera
 mod optimize;
 pub mod regex;
 
-use optimize::optimize_extracted;
+// use optimize::optimize_extracted;
 
 #[derive(Clone)]
 pub struct DocMatch {
@@ -50,7 +50,7 @@ pub fn search_regex<'a>(
     };
 
     // dbg!(&extracted);
-    extracted = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
+    // extracted = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
     // dbg!(&extracted);
 
     match extracted {
