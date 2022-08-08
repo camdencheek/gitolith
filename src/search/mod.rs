@@ -181,18 +181,14 @@ fn new_unindexed_match_iterator<'a>(
     )
 }
 
-struct ExactDocIter {
+struct ConcatIterator {
     matched_indexes: Vec<Vec<(ContentIdx, usize)>>,
     cursors: Vec<usize>,
-    doc_ends: Arc<DocEnds>,
-    docs: CachedDocs,
 }
 
-impl ExactDocIter {
-    fn new(docs: CachedDocs, matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
+impl ConcatIterator {
+    fn new(matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
         Self {
-            doc_ends: docs.read_doc_ends(),
-            docs,
             cursors: vec![0; matched_indexes.len()],
             matched_indexes,
         }
@@ -226,28 +222,45 @@ impl ExactDocIter {
         }
         return (false, 0);
     }
+}
 
-    fn next_candidate(&mut self) -> Option<(ContentIdx, usize)> {
-        let i = self.cursors[0];
-        let v = &self.matched_indexes[0];
-        if i >= v.len() {
-            None
-        } else {
+impl Iterator for ConcatIterator {
+    type Item = (ContentIdx, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (start, len) = {
+                let i = self.cursors[0];
+                let v = &self.matched_indexes[0];
+                if i >= v.len() {
+                    return None;
+                }
+                v[i]
+            };
+
             self.cursors[0] += 1;
-            Some(v[i])
+            let (ok, len) = self.has_successor(start, len, 0);
+            if ok {
+                return Some((start, len));
+            } else {
+                continue;
+            }
         }
     }
+}
 
-    fn next_candidate_in(&mut self, end: ContentIdx) -> Option<(ContentIdx, usize)> {
-        let i = self.cursors[0];
-        let v = &self.matched_indexes[0];
-        if i >= v.len() {
-            None
-        } else if v[i].0 >= end {
-            None
-        } else {
-            self.cursors[0] += 1;
-            Some(v[i])
+struct ExactDocIter {
+    candidates: Peekable<ConcatIterator>,
+    doc_ends: Arc<DocEnds>,
+    docs: CachedDocs,
+}
+
+impl ExactDocIter {
+    fn new(docs: CachedDocs, matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
+        Self {
+            doc_ends: docs.read_doc_ends(),
+            docs,
+            candidates: ConcatIterator::new(matched_indexes).peekable(),
         }
     }
 }
@@ -256,7 +269,7 @@ impl Iterator for ExactDocIter {
     type Item = DocMatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (first_index, first_len) = self.next_candidate()?;
+        let (first_index, first_len) = self.candidates.next()?;
         let doc_id = self.doc_ends.find(first_index);
         let doc_range = self.doc_ends.content_range(doc_id);
 
@@ -276,11 +289,8 @@ impl Iterator for ExactDocIter {
         };
         add_match(first_index, first_len);
 
-        while let Some((idx, len)) = self.next_candidate_in(doc_range.end) {
-            match self.has_successor(idx, len, 0) {
-                (true, l) => add_match(idx, l),
-                _ => {}
-            }
+        while let Some((idx, len)) = self.candidates.next_if(|(idx, _)| *idx < doc_range.end) {
+            add_match(idx, len)
         }
 
         Some(res)
