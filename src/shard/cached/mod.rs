@@ -359,8 +359,7 @@ pub struct SuffixRangeIterator {
     range_set: ConcatLiteralSet,
     suffixes: CachedSuffixes,
     trigrams: Arc<CompressedTrigramPointers>,
-    start_buf: Vec<u8>,
-    end_buf: Vec<u8>,
+    buf: Vec<u8>,
 }
 
 impl SuffixRangeIterator {
@@ -370,8 +369,7 @@ impl SuffixRangeIterator {
             range_set,
             trigrams: suffixes.read_trigram_pointers(),
             suffixes,
-            start_buf: Vec::new(),
-            end_buf: Vec::new(),
+            buf: Vec::new(),
         }
     }
 }
@@ -381,17 +379,13 @@ impl Iterator for SuffixRangeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let state = self.states.next()?;
-        self.start_buf.clear();
-        self.end_buf.clear();
-        self.range_set
-            .write_nth_literal_to(state, &mut self.start_buf, &mut self.end_buf);
-
-        debug_assert!(self.start_buf.len() == self.end_buf.len());
+        self.buf.clear();
+        self.range_set.write_nth_literal_to(state, &mut self.buf);
 
         Some((
             self.suffixes
-                .lookup_prefix_range(&self.trigrams, &self.start_buf..=&self.end_buf),
-            self.start_buf.len(),
+                .lookup_prefix_range(&self.trigrams, &self.buf..=&self.buf),
+            self.buf.len(),
         ))
     }
 }

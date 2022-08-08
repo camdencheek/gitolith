@@ -36,7 +36,7 @@ impl ConcatLiteralSet {
         Self(concat)
     }
 
-    /// The number of contiguous literal ranges represented by this ConcatLiteralSet.
+    /// The number of literals represented by this ConcatLiteralSet.
     /// The n-th literal range can be extracted using `write_state_to(i, ...)`.
     pub fn cardinality(&self) -> usize {
         self.0.iter().map(LiteralSet::cardinality).product()
@@ -50,7 +50,7 @@ impl ConcatLiteralSet {
         self.0.as_ref()
     }
 
-    pub fn write_nth_literal_to(&self, mut state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
+    pub fn write_nth_literal_to(&self, mut state: usize, dst: &mut Vec<u8>) {
         debug_assert!(state < self.cardinality());
 
         // TODO document this. Intuition is treating the PrefixRangeSet as a mixed-radix number
@@ -61,7 +61,7 @@ impl ConcatLiteralSet {
             place_value /= set.cardinality();
             let digit = state / place_value;
             state = state % place_value;
-            set.write_state_to(digit, start, end);
+            set.write_state_to(digit, dst);
         }
     }
 }
@@ -82,8 +82,14 @@ impl LiteralSet {
         match self {
             Byte(_) => 1,
             Unicode(c) => 1,
-            ByteClass(v) => v.len(),
-            UnicodeClass(v) => v.len(),
+            ByteClass(v) => v
+                .iter()
+                .map(|range| range.end() as usize - range.start() as usize + 1)
+                .sum(),
+            UnicodeClass(v) => v
+                .iter()
+                .map(|range| (range.end() as u32 - range.start() as u32) as usize + 1)
+                .sum(),
             Alternation(v) => v.iter().map(|s| s.cardinality()).sum(),
         }
     }
@@ -116,34 +122,51 @@ impl LiteralSet {
         }
     }
 
-    fn write_state_to(&self, state: usize, start: &mut Vec<u8>, end: &mut Vec<u8>) {
+    fn write_state_to(&self, mut state: usize, dst: &mut Vec<u8>) {
         use LiteralSet::*;
 
         match self {
             Byte(b) => {
                 debug_assert!(state == 0);
-                start.push(*b);
-                end.push(*b);
+                dst.push(*b);
             }
             Unicode(c) => {
                 debug_assert!(state == 0);
                 let mut buf = [0u8; 4];
                 let bytes = c.encode_utf8(&mut buf).as_bytes();
-                start.extend_from_slice(bytes);
-                end.extend_from_slice(bytes);
+                dst.extend_from_slice(bytes);
             }
             ByteClass(v) => {
-                let class = v[state];
-                start.push(class.start());
-                end.push(class.end());
+                fn class_len(class: &hir::ClassBytesRange) -> usize {
+                    // class.end() is inclusive, so add 1
+                    (class.end() - class.start()) as usize + 1
+                }
+                for class in v {
+                    if state >= class_len(class) {
+                        state -= class_len(class);
+                        continue;
+                    }
+                    let b = class.start() + state as u8;
+                    dst.push(b);
+                    break;
+                }
             }
             UnicodeClass(v) => {
-                let class = v[state];
-                let mut buf = [0u8; 4];
-                let start_bytes = class.start().encode_utf8(&mut buf).as_bytes();
-                start.extend_from_slice(start_bytes);
-                let end_bytes = class.start().encode_utf8(&mut buf).as_bytes();
-                end.extend_from_slice(end_bytes);
+                fn class_len(class: &hir::ClassUnicodeRange) -> usize {
+                    // class.end() is inclusive, so add 1
+                    (class.end() as u32 - class.start() as u32) as usize + 1
+                }
+                for class in v {
+                    if state >= class_len(class) {
+                        state -= class_len(class);
+                        continue;
+                    }
+                    let c = char::from_u32(class.start() as u32 + state as u32).unwrap();
+                    let mut buf = [0u8; 4];
+                    let bytes = c.encode_utf8(&mut buf).as_bytes();
+                    dst.extend_from_slice(bytes);
+                    break;
+                }
             }
             Alternation(v) => {
                 let mut state = state;
@@ -152,7 +175,7 @@ impl LiteralSet {
                         state -= concat.cardinality();
                         continue;
                     }
-                    concat.write_nth_literal_to(state, start, end);
+                    concat.write_nth_literal_to(state, dst);
                     break;
                 }
             }
