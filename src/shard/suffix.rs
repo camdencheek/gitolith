@@ -186,14 +186,6 @@ impl CompressedTrigramPointers {
         self.lower_bound(r.start())..self.upper_bound(r.end())
     }
 
-    pub fn selectivity<T>(&self, r: RangeInclusive<T>) -> f64
-    where
-        T: AsRef<[u8]>,
-    {
-        (u32::from(self.upper_bound(r.end())) - u32::from(self.lower_bound(r.start()))) as f64
-            / self.0.universe() as f64
-    }
-
     // Returns an inclusive lower bound on the suffixes with the prefix needle
     pub fn lower_bound<T>(&self, needle: T) -> SuffixIdx
     where

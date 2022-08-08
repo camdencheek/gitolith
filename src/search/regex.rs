@@ -42,10 +42,6 @@ impl ConcatLiteralSet {
         self.0.iter().map(LiteralSet::cardinality).product()
     }
 
-    pub fn selectivity(&self, pointers: &Arc<CompressedTrigramPointers>) -> f64 {
-        self.0.iter().map(|ls| ls.selectivity(&pointers)).product()
-    }
-
     pub fn sets(&self) -> &[LiteralSet] {
         self.0.as_ref()
     }
@@ -91,34 +87,6 @@ impl LiteralSet {
                 .map(|range| (range.end() as u32 - range.start() as u32) as usize + 1)
                 .sum(),
             Alternation(v) => v.iter().map(|s| s.cardinality()).sum(),
-        }
-    }
-
-    pub fn selectivity(&self, pointers: &Arc<CompressedTrigramPointers>) -> f64 {
-        use LiteralSet::*;
-
-        match self {
-            Byte(b) => pointers.selectivity([*b]..=[*b]),
-            Unicode(c) => {
-                let mut dst = [0u8; 4];
-                let encoded = c.encode_utf8(&mut dst);
-                pointers.selectivity(&encoded..=&encoded)
-            }
-            ByteClass(v) => v
-                .iter()
-                .map(|c| pointers.selectivity([c.start()]..=[c.end()]))
-                .sum(),
-            UnicodeClass(v) => v
-                .iter()
-                .map(|c| {
-                    let mut start_buf = [0u8; 4];
-                    let start = c.start().encode_utf8(&mut start_buf);
-                    let mut end_buf = [0u8; 4];
-                    let end = c.end().encode_utf8(&mut end_buf);
-                    pointers.selectivity(&start..=&end)
-                })
-                .sum(),
-            Alternation(v) => v.iter().map(|ps| ps.selectivity(&pointers)).sum(),
         }
     }
 

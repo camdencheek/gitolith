@@ -16,40 +16,27 @@ pub fn optimize_extracted(
         // Exact(set) => optimize_inexact_literals(vec![set], trigrams),
         // TODO make sure exact doesn't get too long.
         Exact(set) => Exact(set),
-        Inexact(sets) => optimize_inexact_literals(sets, trigrams),
+        Inexact(sets) => optimize_inexact_literals(sets),
         None => None,
     }
 }
 
-fn optimize_inexact_literals(
-    sets: Vec<ConcatLiteralSet>,
-    trigrams: &Arc<CompressedTrigramPointers>,
-) -> ExtractedRegexLiterals {
+fn optimize_inexact_literals(sets: Vec<ConcatLiteralSet>) -> ExtractedRegexLiterals {
     let mut sets: Vec<ConcatLiteralSet> = sets
         .into_iter()
-        .map(|set| optimize_prefix_range_set(set, &trigrams))
+        .map(|set| optimize_prefix_range_set(set))
         .flatten()
-        .filter(|set| set.selectivity(&trigrams) < 0.0001)
         .collect();
 
     if sets.len() == 0 {
         return ExtractedRegexLiterals::None;
     }
 
-    sets.sort_by(|a, b| {
-        a.selectivity(&trigrams)
-            .partial_cmp(&b.selectivity(&trigrams))
-            .unwrap()
-            .reverse()
-    });
     sets.truncate(3);
     ExtractedRegexLiterals::Inexact(sets)
 }
 
-fn optimize_prefix_range_set(
-    set: ConcatLiteralSet,
-    trigrams: &Arc<CompressedTrigramPointers>,
-) -> Vec<ConcatLiteralSet> {
+fn optimize_prefix_range_set(set: ConcatLiteralSet) -> Vec<ConcatLiteralSet> {
     let max_len = 256;
     let total_len = set.cardinality();
     if total_len < max_len {
