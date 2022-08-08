@@ -2,7 +2,6 @@ use anyhow::Error;
 use bitvec::{self, vec::BitVec};
 use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
 use rayon::slice::*;
-use std::io::{self, Write};
 use std::iter::{Cycle, Peekable};
 use std::ops::Range;
 use std::sync::Arc;
@@ -14,14 +13,11 @@ use crate::shard::cached::{
 };
 use crate::shard::content::ContentIdx;
 use crate::shard::docs::DocIDIterator;
-use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID, SuffixIdx};
-use crate::shard::{
-    docs::{CompressedDocEnds, DocEnds, DocID, DocStore},
-    Shard,
-};
+use crate::shard::docs::{DocEnds, DocID};
+use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
 
 use self::optimize::OptimizedLiterals;
-use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
+use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals};
 
 mod optimize;
 pub mod regex;
@@ -44,7 +40,7 @@ pub fn search_regex<'a>(
     let ast = regex_syntax::ast::parse::Parser::new().parse(&query)?;
     let hir = regex_syntax::hir::translate::Translator::new().translate(&query, &ast)?;
 
-    let mut extracted = if skip_index {
+    let extracted = if skip_index {
         ExtractedRegexLiterals::None
     } else {
         extract_regex_literals(hir)
@@ -114,7 +110,6 @@ fn new_inexact_match_iterator<'a>(
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
     let doc_ends = shard.docs().read_doc_ends();
     let suffixes = shard.suffixes();
-    let doc_ids = shard.docs().doc_ids();
     let docs = Arc::new(shard.docs());
 
     let content_idx_iters = literals
@@ -123,7 +118,7 @@ fn new_inexact_match_iterator<'a>(
         .map(|suf_range_iter| {
             let suffixes = shard.suffixes();
             suf_range_iter
-                .map(|(suf_range, len)| suf_range)
+                .map(|(suf_range, _)| suf_range)
                 .filter(|suf_range| suf_range.start != suf_range.end)
                 .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes.clone()))
                 .flatten()
@@ -153,7 +148,6 @@ fn new_unindexed_match_iterator<'a>(
     shard: CachedShard,
     scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
-    let suffixes = shard.suffixes();
     let doc_ends = shard.docs().read_doc_ends();
     let doc_ids = shard.docs().doc_ids();
     let re = Arc::new(re);
@@ -318,7 +312,7 @@ where
         for child_idx in (0..num_children).cycle() {
             // SAFETY: child_idx will never be out of bounds because we're iterating
             // over indexes from 0..self.children.len()
-            let mut child = unsafe { self.children.get_unchecked_mut(child_idx) };
+            let child = unsafe { self.children.get_unchecked_mut(child_idx) };
 
             loop {
                 let next_doc = child.next()?;
@@ -395,8 +389,6 @@ struct ContentIdxIterator {
 
     current_block: Option<Arc<SuffixBlock>>,
     current_block_idx_iter: <Range<usize> as IntoIterator>::IntoIter,
-
-    suffixes: CachedSuffixes,
 }
 
 impl ContentIdxIterator {
@@ -407,7 +399,6 @@ impl ContentIdxIterator {
             block_range,
             current_block: None,
             current_block_idx_iter: (0..0).into_iter(),
-            suffixes,
         }
     }
 
@@ -458,52 +449,6 @@ impl Iterator for ContentIdxIterator {
         };
 
         Some(block.0[idx])
-    }
-}
-
-struct SequentialDocChecker<T> {
-    doc_ids: T,
-    docs: CachedDocs,
-    doc_ends: DocEnds,
-    re: Regex,
-}
-
-impl<T> SequentialDocChecker<T> {
-    fn new(doc_ids: T, docs: CachedDocs, doc_ends: DocEnds, re: Regex) -> Self {
-        Self {
-            doc_ids,
-            docs,
-            doc_ends,
-            re,
-        }
-    }
-}
-
-impl<T> Iterator for SequentialDocChecker<T>
-where
-    T: Iterator<Item = DocID>,
-{
-    type Item = Result<DocMatch, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Loop until we find a doc with matches
-        loop {
-            let doc_id = self.doc_ids.next()?;
-            let content = self.docs.read_content(doc_id, &self.doc_ends);
-            let matched_ranges: Vec<Range<u32>> = self
-                .re
-                .find_iter(&content)
-                .map(|m| m.start() as u32..m.end() as u32)
-                .collect();
-
-            if matched_ranges.len() > 0 {
-                return Some(Ok(DocMatch {
-                    id: doc_id,
-                    matches: matched_ranges,
-                    content,
-                }));
-            }
-        }
     }
 }
 
@@ -568,7 +513,7 @@ where
         // TODO it would be best to pass in a scope here so we can propagate panics.
         self.scope.spawn_fifo(move |_| {
             let r = f(next_input);
-            tx.send(r);
+            tx.send(r).expect("channel should always be sendable");
         });
     }
 }
@@ -585,15 +530,13 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.start_once();
 
-        loop {
-            let idx = self.next_receiver.next().unwrap();
-            let rx = self.receivers[idx].clone();
-            match rx.recv() {
-                Err(RecvError) => return None,
-                Ok(r) => {
-                    self.spawn_task(idx);
-                    return Some(r);
-                }
+        let idx = self.next_receiver.next().unwrap();
+        let rx = self.receivers[idx].clone();
+        match rx.recv() {
+            Err(RecvError) => return None,
+            Ok(r) => {
+                self.spawn_task(idx);
+                return Some(r);
             }
         }
     }
@@ -637,7 +580,7 @@ mod test {
 
     use crate::{
         cache,
-        shard::{builder::ShardBuilder, cached::CachedShard, Shard, ShardID},
+        shard::{builder::ShardBuilder, cached::CachedShard, ShardID},
     };
 
     use super::search_regex;

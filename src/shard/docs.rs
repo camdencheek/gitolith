@@ -35,7 +35,7 @@ impl DocID {
     }
 
     pub fn into_iter(range: Range<DocID>) -> impl ExactSizeIterator<Item = DocID> {
-        (range.start.0 as u32..range.end.0 as u32).map(|i| DocID(i))
+        (range.start.0 as u32..range.end.0 as u32).map(DocID)
     }
 }
 
@@ -63,7 +63,7 @@ impl DocStore {
     }
 
     pub fn doc_ids(&self) -> impl Iterator<Item = DocID> {
-        (0..self.doc_ends_len).into_iter().map(|id| DocID(id))
+        (0..self.doc_ends_len).into_iter().map(DocID)
     }
 
     pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Vec<u8>, io::Error> {
@@ -75,13 +75,13 @@ impl DocStore {
     // that contain the zero-byte separators at the end of each document.
     pub fn read_doc_ends(&self) -> Result<DocEnds, io::Error> {
         let doc_ends = vec![ContentIdx(0u32); self.doc_ends_len as usize];
-        let mut doc_ends_bytes = unsafe {
+        let doc_ends_bytes = unsafe {
             std::slice::from_raw_parts_mut(
                 doc_ends.as_ptr() as *mut u8,
                 doc_ends.len() * std::mem::size_of::<u32>(),
             )
         };
-        (*self.file).read_exact_at(&mut doc_ends_bytes, self.doc_ends_ptr)?;
+        (*self.file).read_exact_at(doc_ends_bytes, self.doc_ends_ptr)?;
         Ok(DocEnds(doc_ends))
     }
 
@@ -92,10 +92,6 @@ impl DocStore {
     pub fn max_doc_id(&self) -> DocID {
         DocID(self.num_docs() - 1)
     }
-}
-
-pub struct CachedDocStore {
-    doc_store: DocStore,
 }
 
 #[derive(Debug)]
@@ -231,7 +227,6 @@ mod test {
             ContentIdx(20),
             ContentIdx(100),
         ]);
-        let compressed = doc_ends.compress();
 
         let tests = vec![
             (ContentIdx(0), DocID(0)),

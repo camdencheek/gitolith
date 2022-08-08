@@ -1,5 +1,4 @@
 use std::{
-    io,
     ops::{Range, RangeInclusive},
     sync::Arc,
 };
@@ -10,12 +9,9 @@ use crate::{
 };
 
 use super::{
-    content::{ContentIdx, ContentStore},
+    content::ContentIdx,
     docs::{DocEnds, DocID, DocStore},
-    suffix::{
-        CompressedTrigramPointers, ReadTrigramPointersError, SuffixArrayStore, SuffixBlock,
-        SuffixBlockID, SuffixIdx,
-    },
+    suffix::{CompressedTrigramPointers, SuffixArrayStore, SuffixBlock, SuffixBlockID, SuffixIdx},
     Shard, ShardID,
 };
 
@@ -178,8 +174,6 @@ impl CachedSuffixes {
         T: AsRef<[u8]>,
     {
         let doc_ends = self.docs.read_doc_ends();
-        let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
-
         let pred = |suffix_idx| {
             // TODO we can probably improve perf here by holding onto the last block or two.
             // However, this might also confuse the cache metrics. Benchmark this
@@ -240,7 +234,7 @@ impl CachedSuffixes {
                 }
             }
             // prefix is equal
-            return true;
+            true
         };
         self.find_suffix_idx(pred, Some(bounds))
     }
@@ -262,7 +256,7 @@ impl CachedSuffixes {
                 max = mid
             }
         }
-        return min;
+        min
     }
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Arc<SuffixBlock> {
@@ -365,7 +359,7 @@ pub struct SuffixRangeIterator {
 impl SuffixRangeIterator {
     pub fn new(range_set: ConcatLiteralSet, suffixes: CachedSuffixes) -> Self {
         Self {
-            states: (0..range_set.cardinality()).into_iter(),
+            states: (0..range_set.cardinality()),
             range_set,
             trigrams: suffixes.read_trigram_pointers(),
             suffixes,

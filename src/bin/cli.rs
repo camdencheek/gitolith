@@ -1,10 +1,9 @@
-#![allow(unused)]
+// #![allow(unused)]
 
 use anyhow::Error;
 use clap::{Parser, Subcommand};
-use regex::Regex;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use walkdir::WalkDir;
@@ -141,9 +140,9 @@ fn list(args: ListArgs) -> Result<(), Error> {
 
 fn build_index(args: IndexArgs) -> Result<(), Error> {
     if let Some(dir) = args.dir {
-        return build_directory_index(args.output_shard, dir);
+        build_directory_index(args.output_shard, dir)
     } else if let Some(s) = args.string {
-        return build_string_index(args.output_shard, s);
+        build_string_index(args.output_shard, s)
     } else {
         panic!("must specify a directory or a string to index")
     }
@@ -155,7 +154,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file());
 
-    let mut builder = ShardBuilder::new(&Path::new(&output_shard))?;
+    let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
     for entry in documents {
         let f = File::open(entry.path())?;
         let l = f.metadata()?.len();
@@ -170,7 +169,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
 }
 
 fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Error> {
-    let mut builder = ShardBuilder::new(&Path::new(&output_shard))?;
+    let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
     builder.add_doc(s.as_bytes())?;
     builder.build()?;
     Ok(())

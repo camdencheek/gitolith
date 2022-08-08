@@ -97,17 +97,17 @@ impl ShardHeader {
     // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
-        buf.write(&self.version.to_le_bytes()).unwrap();
-        buf.write(&self.flags.to_le_bytes()).unwrap();
-        buf.write(&self._padding.to_le_bytes()).unwrap();
-        buf.write(&self.content_ptr.to_le_bytes()).unwrap();
-        buf.write(&self.content_len.to_le_bytes()).unwrap();
-        buf.write(&self.doc_ends_ptr.to_le_bytes()).unwrap();
-        buf.write(&self.doc_ends_len.to_le_bytes()).unwrap();
-        buf.write(&self.sa_ptr.to_le_bytes()).unwrap();
-        buf.write(&self.sa_len.to_le_bytes()).unwrap();
-        buf.write(&self.trigrams_ptr.to_le_bytes()).unwrap();
-        buf.write(&self.trigrams_len.to_le_bytes()).unwrap();
+        buf.write_all(&self.version.to_le_bytes()).unwrap();
+        buf.write_all(&self.flags.to_le_bytes()).unwrap();
+        buf.write_all(&self._padding.to_le_bytes()).unwrap();
+        buf.write_all(&self.content_ptr.to_le_bytes()).unwrap();
+        buf.write_all(&self.content_len.to_le_bytes()).unwrap();
+        buf.write_all(&self.doc_ends_ptr.to_le_bytes()).unwrap();
+        buf.write_all(&self.doc_ends_len.to_le_bytes()).unwrap();
+        buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
+        buf.write_all(&self.sa_len.to_le_bytes()).unwrap();
+        buf.write_all(&self.trigrams_ptr.to_le_bytes()).unwrap();
+        buf.write_all(&self.trigrams_len.to_le_bytes()).unwrap();
         buf
     }
 
