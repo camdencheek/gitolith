@@ -1,11 +1,5 @@
-use std::ops::Range;
-use std::sync::Arc;
-use std::{io::Write, ops::RangeInclusive};
-
 use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
-
-use crate::shard::suffix::CompressedTrigramPointers;
 
 #[derive(Clone, Debug)]
 pub enum ExtractedRegexLiterals {
@@ -77,7 +71,7 @@ impl LiteralSet {
 
         match self {
             Byte(_) => 1,
-            Unicode(c) => 1,
+            Unicode(_) => 1,
             ByteClass(v) => v
                 .iter()
                 .map(|range| range.end() as usize - range.start() as usize + 1)
@@ -209,7 +203,7 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
             // because we can add the first guaranteed char.
             _ => env.cannot_handle(),
         }
-    };
+    }
 
     let mut env = Env {
         current: Vec::new(),

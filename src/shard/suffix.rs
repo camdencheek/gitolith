@@ -1,4 +1,3 @@
-use anyhow::Error;
 use derive_more::{Add, AddAssign, Div, From, Into, Mul, Sub};
 use std::fs::File;
 use std::io::{self, Read};
@@ -8,8 +7,7 @@ use std::sync::Arc;
 use sucds::elias_fano::EliasFano;
 use sucds::{EliasFanoBuilder, Searial};
 
-use super::content::{ContentIdx, ContentStore};
-use suffix;
+use super::content::ContentIdx;
 
 #[derive(
     Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
@@ -49,7 +47,6 @@ impl SuffixBlock {
 #[derive(Clone)]
 pub struct SuffixArrayStore {
     file: Arc<File>,
-    content: ContentStore,
     // Pointer to the suffix array relative to the start of the file
     sa_ptr: u64,
     // Length in u32s, not bytes
@@ -62,7 +59,6 @@ pub struct SuffixArrayStore {
 impl SuffixArrayStore {
     pub fn new(
         file: Arc<File>,
-        content: ContentStore,
         sa_ptr: u64,
         sa_len: u32,
         trigrams_ptr: u64,
@@ -72,7 +68,6 @@ impl SuffixArrayStore {
 
         Self {
             file,
-            content,
             sa_ptr,
             sa_len,
             trigrams_ptr,
@@ -91,7 +86,7 @@ impl SuffixArrayStore {
     pub fn block_range(suffix_range: Range<SuffixIdx>) -> Range<(SuffixBlockID, usize)> {
         let start = Self::block_id_for_suffix(suffix_range.start);
         let end = if u32::from(suffix_range.end) % SuffixBlock::SIZE_SUFFIXES as u32 == 0 {
-            let (id, offset) = Self::block_id_for_suffix(suffix_range.end);
+            let (id, _) = Self::block_id_for_suffix(suffix_range.end);
             (id, SuffixBlock::SIZE_SUFFIXES)
         } else {
             Self::block_id_for_suffix(suffix_range.end)

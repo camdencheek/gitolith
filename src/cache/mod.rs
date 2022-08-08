@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::shard::docs::{CompressedDocEnds, DocEnds, DocID};
+use crate::shard::docs::{DocEnds, DocID};
 use crate::shard::suffix::{CompressedTrigramPointers, SuffixBlock, SuffixBlockID};
 use crate::shard::ShardID;
 

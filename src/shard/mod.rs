@@ -57,7 +57,6 @@ impl Shard {
         );
         let suffixes = SuffixArrayStore::new(
             Arc::clone(&file),
-            content,
             header.sa_ptr,
             header.sa_len as u32,
             header.trigrams_ptr,
@@ -91,8 +90,6 @@ impl ShardHeader {
     const VERSION: u16 = 1;
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_COMPLETE: u16 = 1 << 0;
-
-    const OFFSETS_LEN: usize = 256;
 
     // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {

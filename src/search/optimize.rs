@@ -1,8 +1,4 @@
-use std::{ops::Range, sync::Arc};
-
-use crate::shard::suffix::CompressedTrigramPointers;
-
-use super::regex::{ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
+use super::regex::{ConcatLiteralSet, ExtractedRegexLiterals};
 
 #[derive(Debug)]
 pub enum OptimizedLiterals {
