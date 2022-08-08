@@ -4,99 +4,57 @@ use crate::shard::suffix::CompressedTrigramPointers;
 
 use super::regex::{ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
 
-// pub enum OptimizedLiterals {
-//     OrderedExact(Vec<ConcatLiteralSet>),
-//     Inexact(Vec<OptimizedLiterals>),
-//     None,
-// }
+pub enum OptimizedLiterals {
+    OrderedExact(Vec<ConcatLiteralSet>),
+    Inexact(Vec<OptimizedLiterals>),
+    None,
+}
 
-// pub fn optimize_extracted(
-//     extracted: ExtractedRegexLiterals,
-//     trigrams: &Arc<CompressedTrigramPointers>,
-// ) -> OptimizedLiterals {
-//     use ExtractedRegexLiterals::*;
+pub fn optimize_extracted(
+    extracted: ExtractedRegexLiterals,
+    trigrams: &Arc<CompressedTrigramPointers>,
+) -> OptimizedLiterals {
+    use ExtractedRegexLiterals::*;
 
-//     match extracted {
-//         // We don't handle exact matches specially right now,
-//         // so just optimize it as inexact.
-//         // Exact(set) => optimize_inexact_literals(vec![set], trigrams),
-//         // TODO make sure exact doesn't get too long.
-//         Exact(set) => Exact(set),
-//         Inexact(sets) => optimize_inexact_literals(sets),
-//         None => None,
-//     }
-// }
+    match extracted {
+        Exact(set) => optimize_exact_literals(set),
+        Inexact(sets) => optimize_inexact_literals(sets),
+        None => OptimizedLiterals::None,
+    }
+}
 
-// fn optimize_exact_literals(concat: ConcatLiteralSet) -> ExtractedRegexLiterals {
-//     let cardinality_limit = 1024; // TODO tune this parameter
+fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
+    let cardinality_limit = 1024; // TODO tune this parameter
 
-//     if concat.cardinality() <= cardinality_limit {
-//         return ExtractedRegexLiterals::Exact(concat);
-//     }
-// }
+    for n in 1..=concat.as_ref().len() {
+        let mut min_cardinality = usize::MAX;
+        let mut min_split: Vec<ConcatLiteralSet> = Vec::new();
 
-// fn optimize_inexact_literals(sets: Vec<ConcatLiteralSet>) -> ExtractedRegexLiterals {
-//     let mut sets: Vec<ConcatLiteralSet> = sets
-//         .into_iter()
-//         .map(|set| optimize_prefix_range_set(set))
-//         .flatten()
-//         .collect();
+        // TODO this might be a lot of allocations
+        let splits = SplitIterator::new(concat.as_ref(), n).map(|sets| {
+            sets.iter()
+                .map(|set| ConcatLiteralSet::new(set.to_vec()))
+                .collect::<Vec<ConcatLiteralSet>>()
+        });
 
-//     if sets.len() == 0 {
-//         return ExtractedRegexLiterals::None;
-//     }
+        for split in splits {
+            let cardinality = split.iter().map(ConcatLiteralSet::cardinality).sum();
+            if cardinality < min_cardinality {
+                min_cardinality = cardinality;
+                min_split = split;
+            }
+        }
+        if min_cardinality < cardinality_limit * n {
+            return OptimizedLiterals::OrderedExact(min_split);
+        }
+    }
 
-//     sets.truncate(3);
-//     ExtractedRegexLiterals::Inexact(sets)
-// }
+    return optimize_inexact_literals(vec![concat]);
+}
 
-// fn optimize_prefix_range_set(set: ConcatLiteralSet) -> Vec<ConcatLiteralSet> {
-//     let max_len = 256;
-//     let total_len = set.cardinality();
-//     if total_len < max_len {
-//         return vec![set];
-//     }
-
-//     let lits = set.sets();
-//     let mut res = Vec::new();
-//     for num_slices in 2..lits.len() {
-//         res.clear();
-//         let target_product = (total_len as f64).powf(1f64 / num_slices as f64) as usize;
-//         if target_product > max_len {
-//             continue;
-//         }
-
-//         let mut start = 0;
-//         for slice_num in 0..num_slices - 1 {
-//             for end in start + 1..lits.len() {
-//                 let slice_len: usize = lits[start..end]
-//                     .iter()
-//                     .map(LiteralSet::cardinality)
-//                     .product();
-//                 if slice_len > target_product {
-//                     res.push(lits[start..end - 1].to_vec());
-//                     start = end - 1;
-//                     break;
-//                 }
-//             }
-//         }
-//         let last_slice = &lits[start..];
-//         if last_slice
-//             .iter()
-//             .map(LiteralSet::cardinality)
-//             .product::<usize>()
-//             > max_len
-//         {
-//             continue;
-//         }
-//         res.push(last_slice.to_vec());
-//         return res.into_iter().map(ConcatLiteralSet::new).collect();
-//     }
-
-//     // I'm not 100% convinced the above loop will always terminate, so as
-//     // a safety measure, always just return the original if optimization fails.
-//     vec![set]
-// }
+fn optimize_inexact_literals(sets: Vec<ConcatLiteralSet>) -> OptimizedLiterals {
+    todo!()
+}
 
 struct SplitIterator<'a, T> {
     items: &'a [T],

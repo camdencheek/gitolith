@@ -20,12 +20,13 @@ use crate::shard::{
     Shard,
 };
 
+use self::optimize::OptimizedLiterals;
 use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
 
 mod optimize;
 pub mod regex;
 
-// use optimize::optimize_extracted;
+use optimize::optimize_extracted;
 
 #[derive(Clone)]
 pub struct DocMatch {
@@ -50,11 +51,11 @@ pub fn search_regex<'a>(
     };
 
     // dbg!(&extracted);
-    // extracted = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
+    let optimized = optimize_extracted(extracted, &s.suffixes().read_trigram_pointers());
     // dbg!(&extracted);
 
-    match extracted {
-        ExtractedRegexLiterals::None => {
+    match optimized {
+        OptimizedLiterals::None => {
             let re = Regex::new(query)?;
             let doc_ends = s.docs().read_doc_ends();
             let suffixes = s.suffixes();
@@ -80,9 +81,8 @@ pub fn search_regex<'a>(
                     .filter(|doc_match| doc_match.matches.len() > 0),
             ))
         }
-        ExtractedRegexLiterals::Exact(set) => {
+        OptimizedLiterals::OrderedExact(set) => {
             let suffixes = s.suffixes();
-            assert!(set.cardinality() < 4096, "this should have optimized away");
             let suf_ranges: Vec<(Range<SuffixIdx>, usize)> =
                 SuffixRangeIterator::new(set, suffixes.clone())
                     .filter(|(suf_range, _)| suf_range.start != suf_range.end)
@@ -105,7 +105,7 @@ pub fn search_regex<'a>(
             content_indexes.par_sort_by_key(|(idx, _)| idx.clone());
             Ok(Box::new(ExactDocIter::new(s.docs(), content_indexes)))
         }
-        ExtractedRegexLiterals::Inexact(all) => {
+        OptimizedLiterals::Inexact(all) => {
             let re = Regex::new(query)?;
             let doc_ends = s.docs().read_doc_ends();
             let suffixes = s.suffixes();

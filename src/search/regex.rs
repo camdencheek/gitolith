@@ -42,7 +42,7 @@ impl ConcatLiteralSet {
         self.0.iter().map(LiteralSet::cardinality).product()
     }
 
-    pub fn sets(&self) -> &[LiteralSet] {
+    pub fn as_ref(&self) -> &[LiteralSet] {
         self.0.as_ref()
     }
 
