@@ -19,9 +19,10 @@ pub fn optimize_extracted(extracted: ExtractedRegexLiterals) -> OptimizedLiteral
 
 // TODO take selectivity into account?
 fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
-    let cardinality_limit = 2048; // TODO tune this parameter
+    let cardinality_limit = 4096; // TODO tune this parameter
 
-    for n in 1..=concat.as_ref().len() {
+    // Don't go past trigrams
+    for n in 1..=concat.as_ref().len() / 3 {
         let split = split_mostly_even(concat.as_ref(), n)
             .iter()
             .map(|lits| ConcatLiteralSet::new(lits.to_vec()))
@@ -32,7 +33,7 @@ fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
             .map(ConcatLiteralSet::cardinality)
             .sum::<usize>();
 
-        if split_cardinality < cardinality_limit * n {
+        if split_cardinality < cardinality_limit {
             return OptimizedLiterals::OrderedExact(split);
         }
     }
