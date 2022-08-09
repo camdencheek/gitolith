@@ -243,23 +243,12 @@ pub enum ReadTrigramPointersError {
 
 #[cfg(test)]
 mod test {
-    use std::io::Stderr;
-
     use super::*;
 
     fn concat_strs(input: &[&str]) -> Vec<u8> {
         let mut content = Vec::new();
         for s in input {
             content.extend_from_slice(s.as_bytes());
-            content.push(0);
-        }
-        content
-    }
-
-    fn concat_bytes(input: &[&[u8]]) -> Vec<u8> {
-        let mut content = Vec::new();
-        for s in input {
-            content.extend_from_slice(s);
             content.push(0);
         }
         content
