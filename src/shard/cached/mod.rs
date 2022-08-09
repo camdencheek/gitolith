@@ -147,7 +147,7 @@ impl CachedSuffixes {
         SuffixBlockIterator::new(self.clone(), range)
     }
 
-    pub fn lookup_prefix_range<T>(
+    pub fn lookup_literal_range<T>(
         &self,
         trigrams: &Arc<CompressedTrigramPointers>,
         prefix_range: RangeInclusive<T>,
@@ -164,38 +164,23 @@ impl CachedSuffixes {
         }
 
         let (start, end) = prefix_range.into_inner();
-        let start_bound = self.lookup_prefix_start(start, start_bounds);
-        let end_bound = self.lookup_prefix_end(end, start_bound..end_bounds.end);
+        let start_bound = self.partition_by_literal(start, false, start_bounds);
+        let end_bound = self.partition_by_literal(end, true, start_bound..end_bounds.end);
         start_bound..end_bound
     }
 
-    fn lookup_prefix_start<T>(&self, prefix: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    fn partition_by_literal<T>(
+        &self,
+        prefix: T,
+        include_equal: bool,
+        bounds: Range<SuffixIdx>,
+    ) -> SuffixIdx
     where
         T: AsRef<[u8]>,
     {
         let doc_ends = self.docs.read_doc_ends();
-        let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
 
-        let pred = |suffix_idx| {
-            // TODO we can probably improve perf here by holding onto the last block or two.
-            // However, this might also confuse the cache metrics. Benchmark this
-            // once we have exact matching.
-            let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
-            let block = {
-                match last_block.take() {
-                    Some((id, block)) => {
-                        if id == block_id {
-                            block
-                        } else {
-                            self.read_block(block_id)
-                        }
-                    }
-                    None => self.read_block(block_id),
-                }
-            };
-            let content_idx = block.0[offset];
-            last_block = Some((block_id, block));
-
+        let pred = |content_idx| {
             let mut prefix_slice: &[u8] = prefix.as_ref();
             let contents = ContiguousContentIterator::new(
                 &self.docs,
@@ -213,27 +198,25 @@ impl CachedSuffixes {
                     return false;
                 }
             }
-            // prefix is equal
-            return false;
+            return include_equal;
         };
-        self.find_suffix_idx(pred, Some(bounds))
+
+        self.partition_by_content_idx(pred, bounds)
     }
 
-    fn lookup_prefix_end<T>(&self, prefix: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    fn partition_by_content_idx<T>(&self, mut pred: T, bounds: Range<SuffixIdx>) -> SuffixIdx
     where
-        T: AsRef<[u8]>,
+        T: FnMut(ContentIdx) -> bool,
     {
-        let doc_ends = self.docs.read_doc_ends();
-
         // Hold on to the last block we fetched because we will hit the same
         // block many times in a row at the end of the lookup.
-        // TODO consider holding on to the last two blocks to handle the case
+        //
+        // TODO: consider holding on to the last two blocks to handle the case
         // where we jump between two blocks repeatedly during a binary search.
         // Either that, or make this binary search block-aware.
         let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
 
-        let pred = |suffix_idx| {
-            // TODO we can probably improve perf here by holding onto the last block or two
+        let suffix_pred = |suffix_idx| -> bool {
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
             let block = {
                 match last_block.take() {
@@ -249,38 +232,17 @@ impl CachedSuffixes {
             };
             let content_idx = block.0[offset];
             last_block = Some((block_id, block));
-
-            let mut prefix_slice: &[u8] = prefix.as_ref();
-            let contents = ContiguousContentIterator::new(
-                &self.docs,
-                &doc_ends,
-                content_idx..content_idx + ContentIdx(prefix_slice.len() as u32),
-            );
-
-            for (doc_content, slicer) in contents {
-                let content = &doc_content[slicer];
-                let (left, right) = prefix_slice.split_at(content.len());
-                prefix_slice = right;
-                if content < left {
-                    return true;
-                } else if content > left {
-                    return false;
-                }
-            }
-            // prefix is equal
-            true
+            pred(content_idx)
         };
-        self.find_suffix_idx(pred, Some(bounds))
+
+        self.partition_by_suffix_idx(suffix_pred, bounds)
     }
 
-    fn find_suffix_idx<T>(&self, mut pred: T, bounds: Option<Range<SuffixIdx>>) -> SuffixIdx
+    fn partition_by_suffix_idx<T>(&self, mut pred: T, bounds: Range<SuffixIdx>) -> SuffixIdx
     where
         T: FnMut(SuffixIdx) -> bool,
     {
-        let (mut min, mut max) = match bounds {
-            Some(r) => (r.start, r.end),
-            None => (SuffixIdx(0), SuffixIdx(self.suffixes.sa_len)),
-        };
+        let (mut min, mut max) = (bounds.start, bounds.end);
 
         while min < max {
             let mid = SuffixIdx((u32::from(max) - u32::from(min)) / 2 + u32::from(min));
@@ -412,7 +374,7 @@ impl Iterator for SuffixRangeIterator {
 
         Some((
             self.suffixes
-                .lookup_prefix_range(&self.trigrams, &self.buf..=&self.buf),
+                .lookup_literal_range(&self.trigrams, &self.buf..=&self.buf),
             self.buf.len(),
         ))
     }
