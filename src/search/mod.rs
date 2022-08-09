@@ -76,9 +76,12 @@ fn new_exact_match_iterator<'a>(
             .iter()
             .map(|(range, _)| u32::from(range.end - range.start) as usize)
             .sum();
-        // TODO tune this. Collecting the indexes in memory and sorting them
-        // could be catastrophically expensive for common patterns.
         if content_idx_count > (1 << 15) {
+            // If the number of candidate matches is very high, fall
+            // back to inexact matching, which will require a regex recheck
+            // but does not require collecting the candidate set in memory.
+            // TODO tune this. Collecting the indexes in memory and sorting them
+            // could be catastrophically expensive for common patterns.
             return Ok(new_inexact_match_iterator(
                 Regex::new(query)?,
                 shard,
@@ -88,7 +91,7 @@ fn new_exact_match_iterator<'a>(
         }
         let mut content_indexes: Vec<(ContentIdx, usize)> = Vec::with_capacity(content_idx_count);
         for (range, len) in suf_ranges.into_iter() {
-            for content_idx in ContentIdxIterator::new(range, suffixes.clone()) {
+            for content_idx in ContentIdxIterator::new(range, &suffixes) {
                 content_indexes.push((content_idx, len));
             }
         }
@@ -120,7 +123,7 @@ fn new_inexact_match_iterator<'a>(
             suf_range_iter
                 .map(|(suf_range, _)| suf_range)
                 .filter(|suf_range| suf_range.start != suf_range.end)
-                .map(move |suf_range| ContentIdxIterator::new(suf_range, suffixes.clone()))
+                .map(move |suf_range| ContentIdxIterator::new(suf_range, &suffixes))
                 .flatten()
         })
         .map(|content_idx_iter| ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter))
@@ -392,7 +395,7 @@ struct ContentIdxIterator {
 }
 
 impl ContentIdxIterator {
-    fn new(suffix_range: Range<SuffixIdx>, suffixes: CachedSuffixes) -> Self {
+    fn new(suffix_range: Range<SuffixIdx>, suffixes: &CachedSuffixes) -> Self {
         let block_range = CachedSuffixes::block_range(suffix_range);
         Self {
             block_iter: suffixes.iter_blocks(Some(block_range.start.0..=block_range.end.0)),

@@ -174,13 +174,27 @@ impl CachedSuffixes {
         T: AsRef<[u8]>,
     {
         let doc_ends = self.docs.read_doc_ends();
+        let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
+
         let pred = |suffix_idx| {
             // TODO we can probably improve perf here by holding onto the last block or two.
             // However, this might also confuse the cache metrics. Benchmark this
             // once we have exact matching.
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
-            let block = self.read_block(block_id);
+            let block = {
+                match last_block.take() {
+                    Some((id, block)) => {
+                        if id == block_id {
+                            block
+                        } else {
+                            self.read_block(block_id)
+                        }
+                    }
+                    None => self.read_block(block_id),
+                }
+            };
             let content_idx = block.0[offset];
+            last_block = Some((block_id, block));
 
             let mut prefix_slice: &[u8] = prefix.as_ref();
             let contents = ContiguousContentIterator::new(
@@ -210,11 +224,31 @@ impl CachedSuffixes {
         T: AsRef<[u8]>,
     {
         let doc_ends = self.docs.read_doc_ends();
+
+        // Hold on to the last block we fetched because we will hit the same
+        // block many times in a row at the end of the lookup.
+        // TODO consider holding on to the last two blocks to handle the case
+        // where we jump between two blocks repeatedly during a binary search.
+        // Either that, or make this binary search block-aware.
+        let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
+
         let pred = |suffix_idx| {
             // TODO we can probably improve perf here by holding onto the last block or two
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
-            let block = self.read_block(block_id);
+            let block = {
+                match last_block.take() {
+                    Some((id, block)) => {
+                        if id == block_id {
+                            block
+                        } else {
+                            self.read_block(block_id)
+                        }
+                    }
+                    None => self.read_block(block_id),
+                }
+            };
             let content_idx = block.0[offset];
+            last_block = Some((block_id, block));
 
             let mut prefix_slice: &[u8] = prefix.as_ref();
             let contents = ContiguousContentIterator::new(
@@ -381,6 +415,16 @@ impl Iterator for SuffixRangeIterator {
                 .lookup_prefix_range(&self.trigrams, &self.buf..=&self.buf),
             self.buf.len(),
         ))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.states.len(), Some(self.states.len()))
+    }
+}
+
+impl ExactSizeIterator for SuffixRangeIterator {
+    fn len(&self) -> usize {
+        self.states.len()
     }
 }
 
