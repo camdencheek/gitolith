@@ -220,17 +220,15 @@ impl CachedSuffixes {
 
         let suffix_pred = |suffix_idx| -> bool {
             let (block_id, offset) = Self::block_id_for_suffix(suffix_idx);
-            let block = {
-                match last_block.take() {
-                    Some((id, block)) => {
-                        if id == block_id {
-                            block
-                        } else {
-                            self.read_block(block_id)
-                        }
+            let block = match last_block.take() {
+                Some((id, block)) => {
+                    if id == block_id {
+                        block
+                    } else {
+                        self.read_block(block_id)
                     }
-                    None => self.read_block(block_id),
                 }
+                None => self.read_block(block_id),
             };
             let content_idx = block.0[offset];
             last_block = Some((block_id, block));
