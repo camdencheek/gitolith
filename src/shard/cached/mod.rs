@@ -209,11 +209,13 @@ impl CachedSuffixes {
         T: FnMut(ContentIdx) -> bool,
     {
         // Hold on to the last block we fetched because we will hit the same
-        // block many times in a row at the end of the lookup.
+        // block many times in a row at the end of the lookup. Hitting the cache
+        // is cheap, but not that cheap.
         //
-        // TODO: consider holding on to the last two blocks to handle the case
-        // where we jump between two blocks repeatedly during a binary search.
-        // Either that, or make this binary search block-aware.
+        // TODO: It may make sense to hold on to the last two fetched blocks so
+        // binary searches that hop between blocks don't need to repeatedly hit the
+        // cache. I tried this, but in a couple of tests it didn't seem to make much
+        // of a difference.
         let mut last_block: Option<(SuffixBlockID, Arc<SuffixBlock>)> = None;
 
         let suffix_pred = |suffix_idx| -> bool {

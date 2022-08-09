@@ -29,6 +29,7 @@ impl From<SuffixBlockID> for u64 {
 pub struct SuffixBlock(pub [ContentIdx; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
+    // 2048 is chosen so SIZE_BYTES is 8192, which is a pretty standard page size.
     pub const SIZE_SUFFIXES: usize = 2048;
     pub const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
 
