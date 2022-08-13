@@ -13,6 +13,7 @@ use gitserver3::search::search_regex;
 use gitserver3::shard::builder::ShardBuilder;
 use gitserver3::shard::cached::CachedShard;
 use gitserver3::shard::{Shard, ShardID};
+use gitserver3::strcmp;
 
 #[derive(Parser, Debug)]
 pub struct Cli {
