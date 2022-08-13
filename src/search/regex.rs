@@ -36,6 +36,10 @@ impl ConcatLiteralSet {
         self.0.iter().map(LiteralSet::cardinality).product()
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn as_ref(&self) -> &[LiteralSet] {
         self.0.as_ref()
     }

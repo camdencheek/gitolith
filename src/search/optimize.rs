@@ -50,6 +50,13 @@ fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiteral
             return OptimizedLiterals::None;
         }
     }
+    // Make sure each is a trigram at minimum
+    // TODO make this work correctly for alternations. We should maybe
+    // just flatten alternations in this representation.
+    res.retain(|concat| concat.len() > 2);
+    res.sort_by_key(|concat| concat.len());
+    res.truncate(4);
+
     OptimizedLiterals::Inexact(res)
 }
 
