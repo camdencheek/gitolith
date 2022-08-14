@@ -239,7 +239,7 @@ impl SortingIterator {
     }
 
     fn sort_next_block(&mut self) {
-        const BLOCK_SIZE: usize = 8192;
+        const BLOCK_SIZE: usize = 1 << 13; // 8192
         let block_start = self.sort_end;
         let block_end = (self.sort_end + BLOCK_SIZE).min(self.inner.len());
         if block_end == self.sort_end + BLOCK_SIZE {
