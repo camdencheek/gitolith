@@ -13,7 +13,6 @@ use gitserver3::search::search_regex;
 use gitserver3::shard::builder::ShardBuilder;
 use gitserver3::shard::cached::CachedShard;
 use gitserver3::shard::{Shard, ShardID};
-use gitserver3::strcmp;
 
 #[derive(Parser, Debug)]
 pub struct Cli {
@@ -48,6 +47,8 @@ pub struct SearchArgs {
     pub count_only: bool,
     #[clap(long = "repeat", short = 'r', default_value = "1")]
     pub repeat: usize,
+    #[clap(long = "limit", short = 'l')]
+    pub limit: Option<usize>,
     #[clap(long = "cache-size")]
     pub cache_size: Option<String>,
 }
@@ -89,8 +90,11 @@ fn search(args: SearchArgs) -> Result<(), Error> {
             let mut buf = std::io::BufWriter::new(handle);
 
             let mut count = 0;
+            let mut limit = args.limit.unwrap_or(usize::MAX);
 
-            for doc_match in search_regex(cs.clone(), &args.query, args.skip_index, s)? {
+            for mut doc_match in search_regex(cs.clone(), &args.query, args.skip_index, s)? {
+                doc_match.matches.truncate(limit);
+                limit -= doc_match.matches.len();
                 if !args.count_only {
                     buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
                 }
@@ -106,11 +110,14 @@ fn search(args: SearchArgs) -> Result<(), Error> {
                         ))?;
                     }
                 }
+                if limit == 0 {
+                    break;
+                }
             }
             buf.flush()?;
 
             println!(
-                "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:?}",
+                "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:3.2?}",
                 i,
                 bytefmt::format(content_size),
                 count,
