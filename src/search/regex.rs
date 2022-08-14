@@ -1,8 +1,6 @@
 use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
 
-use crate::strcmp;
-
 #[derive(Clone, Debug)]
 pub enum ExtractedRegexLiterals {
     /// An exact extraction indicates that every prefix yielded by the iterator is an exact match to

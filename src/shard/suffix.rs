@@ -134,12 +134,14 @@ impl TrigramPointers {
         // to get the pointers without any unsafe.
         let mut frequencies = vec![SuffixIdx(0); Self::N_TRIGRAMS];
 
+        let l = |b: &u8| b.to_ascii_lowercase();
+
         for i in 0..content.len() {
             let suffix = &content[i..];
             let trigram_idx = match suffix {
-                [a, b, c, ..] => u32::from_be_bytes([0, *a, *b, *c]),
-                [a, b] => u32::from_be_bytes([0, *a, *b, 0]),
-                [a] => u32::from_be_bytes([0, *a, 0, 0]),
+                [a, b, c, ..] => u32::from_be_bytes([0, l(a), l(b), l(c)]),
+                [a, b] => u32::from_be_bytes([0, l(a), l(b), 0]),
+                [a] => u32::from_be_bytes([0, l(a), 0, 0]),
                 _ => u32::from_be_bytes([0, 0, 0, 0]),
             };
             frequencies[trigram_idx as usize] += SuffixIdx(1)

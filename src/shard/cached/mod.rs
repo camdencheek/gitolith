@@ -178,6 +178,7 @@ impl CachedSuffixes {
     where
         T: AsRef<[u8]>,
     {
+        use std::cmp::Ordering::*;
         let doc_ends = self.docs.read_doc_ends();
 
         let pred = |content_idx| {
@@ -192,10 +193,10 @@ impl CachedSuffixes {
                 let content = &doc_content[slicer];
                 let (left, right) = prefix_slice.split_at(content.len());
                 prefix_slice = right;
-                if content < left {
-                    return true;
-                } else if content > left {
-                    return false;
+                match cmp_ci(content, left) {
+                    Less => return true,
+                    Greater => return false,
+                    _ => {}
                 }
             }
             return include_equal;
@@ -294,6 +295,20 @@ impl CachedSuffixes {
             _ => unimplemented!(),
         }
     }
+}
+
+fn cmp_ci(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+
+    for (l, r) in left.iter().copied().zip(right.iter().copied()) {
+        match l.to_ascii_lowercase().cmp(&r.to_ascii_lowercase()) {
+            Less => return Less,
+            Greater => return Greater,
+            _ => {}
+        }
+    }
+
+    left.len().cmp(&right.len())
 }
 
 struct ContiguousContentIterator<'a, 'b> {

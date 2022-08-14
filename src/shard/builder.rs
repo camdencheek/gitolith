@@ -1,7 +1,7 @@
 use super::docs::DocID;
 use super::suffix::{SuffixBlock, TrigramPointers};
 use super::{Shard, ShardHeader};
-use crate::strcmp::{ascii_lower, AsciiLowerIter};
+use crate::strcmp::AsciiLowerIter;
 use anyhow::Error;
 use memmap2::{Mmap, MmapMut};
 use std::fs::File;
@@ -135,7 +135,7 @@ impl ShardBuilder {
 
             let mut stypes = table::SuffixTypes::new(sa.len() as u32);
             let mut bins = table::Bins::new();
-            table::sais(sa, &mut stypes, &mut bins, &suffix::Utf8(content_data));
+            table::sais(sa, &mut stypes, &mut bins, &CIBytes(content_data));
             sa_start
         };
         Ok((sa_start, content_len, pointers_start, pointers_len as u64))
@@ -191,12 +191,12 @@ impl<'s> suffix::table::Text for CIBytes<'s> {
 
     #[inline]
     fn prev(&self, i: u32) -> (u32, u32) {
-        (i - 1, self.0[i as usize - 1] as u32)
+        (i - 1, self.0[i as usize - 1].to_ascii_lowercase() as u32)
     }
 
     #[inline]
     fn char_at(&self, i: u32) -> u32 {
-        ascii_lower(self.0[i as usize]) as u32
+        self.0[i as usize].to_ascii_lowercase() as u32
     }
 
     fn char_indices(
@@ -208,13 +208,11 @@ impl<'s> suffix::table::Text for CIBytes<'s> {
     fn wstring_equal(&self, stypes: &table::SuffixTypes, w1: u32, w2: u32) -> bool {
         let w1chars = self.0[w1 as usize..]
             .iter()
-            .copied()
-            .map(ascii_lower)
+            .map(u8::to_ascii_lowercase)
             .enumerate();
         let w2chars = self.0[w2 as usize..]
             .iter()
-            .copied()
-            .map(ascii_lower)
+            .map(u8::to_ascii_lowercase)
             .enumerate();
         for ((i1, c1), (i2, c2)) in w1chars.zip(w2chars) {
             let (i1, i2) = (w1 + i1 as u32, w2 + i2 as u32);
