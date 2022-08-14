@@ -1,0 +1,3 @@
+[submodule "vendor/suffix"]
+	path = vendor/suffix
+	url = file:///Users/camdencheek/src/suffix
