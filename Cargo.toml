@@ -25,6 +25,7 @@ bytefmt = "0.1.7"
 fnv = "1.0.7"
 streaming-iterator = { version = "0.1.6", features = ["std"]}
 git2 = { version = "0.15", features = ["vendored-libgit2"]}
+radsort = "0.1.0"
 
 [profile.release]
 debug = true

@@ -1,7 +1,7 @@
 use anyhow::Error;
 use bitvec::{self, vec::BitVec};
 use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
-use rayon::slice::*;
+use radsort;
 use std::iter::{Cycle, Peekable};
 use std::ops::Range;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ fn new_exact_match_iterator<'a>(
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
     let suffixes = shard.suffixes();
 
-    let mut sorted_content_indexes = Vec::with_capacity(literals.len());
+    let mut all_content_indexes = Vec::with_capacity(literals.len());
     for concat in &literals {
         let suf_ranges = SuffixRangeIterator::new(concat.clone(), suffixes.clone())
             .filter(|(suf_range, _)| suf_range.start != suf_range.end)
@@ -77,7 +77,7 @@ fn new_exact_match_iterator<'a>(
             .iter()
             .map(|(range, _)| u32::from(range.end - range.start) as usize)
             .sum();
-        if content_idx_count > (1 << 15) {
+        if content_idx_count > (1 << 19) {
             // If the number of candidate matches is very high, fall
             // back to inexact matching, which will require a regex recheck
             // but does not require collecting the candidate set in memory.
@@ -90,19 +90,18 @@ fn new_exact_match_iterator<'a>(
                 scope,
             ));
         }
-        let mut content_indexes: Vec<(ContentIdx, usize)> = Vec::with_capacity(content_idx_count);
+        let mut content_indexes: Vec<(ContentIdx, u32)> = Vec::with_capacity(content_idx_count);
         for (range, len) in suf_ranges.into_iter() {
             for content_idx in ContentIdxIterator::new(range, &suffixes) {
-                content_indexes.push((content_idx, len));
+                content_indexes.push((content_idx, len as u32));
             }
         }
-        content_indexes.par_sort_by_key(|(idx, _)| idx.clone());
-        sorted_content_indexes.push(content_indexes);
+        all_content_indexes.push(SortingIterator::new(content_indexes));
     }
 
     Ok(Box::new(ExactDocIter::new(
         shard.docs(),
-        sorted_content_indexes,
+        all_content_indexes,
     )))
 }
 
@@ -177,63 +176,43 @@ fn new_unindexed_match_iterator<'a>(
 }
 
 struct ConcatIterator {
-    matched_indexes: Vec<Vec<(ContentIdx, usize)>>,
-    cursors: Vec<usize>,
+    matched_indexes: Vec<Peekable<SortingIterator>>,
 }
 
 impl ConcatIterator {
-    fn new(matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
+    fn new(matched_indexes: Vec<SortingIterator>) -> Self {
         Self {
-            cursors: vec![0; matched_indexes.len()],
-            matched_indexes,
+            matched_indexes: matched_indexes.into_iter().map(|v| v.peekable()).collect(),
         }
     }
 
     /// Returns the total length
-    fn has_successor(&mut self, location: ContentIdx, len: usize, index: usize) -> (bool, usize) {
-        if index == self.cursors.len() - 1 {
+    fn has_successor(&mut self, location: ContentIdx, len: u32, index: usize) -> (bool, u32) {
+        if index == self.matched_indexes.len() - 1 {
             return (true, len);
         }
 
-        let cursor = self.cursors[index + 1];
-        let v = &self.matched_indexes[index + 1];
-        for i in cursor..v.len() {
-            if v[i].0 <= location {
-                self.cursors[index + 1] = i;
-                continue;
-            }
-
-            if v[i].0 > location + ContentIdx(len as u32) {
-                return (false, 0);
-            }
-
-            if v[i].0 == location + ContentIdx(len as u32) {
-                let (ok, l) = self.has_successor(v[i].0, v[i].1, index + 1);
+        while let Some((loc2, len2)) =
+            self.matched_indexes[index + 1].next_if(|(loc2, _)| loc2 <= &location)
+        {
+            if loc2 == location + ContentIdx(len) {
+                let (ok, l) = self.has_successor(loc2, len2, index + 1);
                 if ok {
                     return (true, len + l);
                 }
-                break;
             }
         }
+
         return (false, 0);
     }
 }
 
 impl Iterator for ConcatIterator {
-    type Item = (ContentIdx, usize);
+    type Item = (ContentIdx, u32);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let (start, len) = {
-                let i = self.cursors[0];
-                let v = &self.matched_indexes[0];
-                if i >= v.len() {
-                    return None;
-                }
-                v[i]
-            };
-
-            self.cursors[0] += 1;
+            let (start, len) = self.matched_indexes[0].next()?;
             let (ok, len) = self.has_successor(start, len, 0);
             if ok {
                 return Some((start, len));
@@ -244,6 +223,50 @@ impl Iterator for ConcatIterator {
     }
 }
 
+pub struct SortingIterator {
+    inner: Vec<(ContentIdx, u32)>,
+    next_idx: usize,
+    sort_end: usize,
+}
+
+impl SortingIterator {
+    fn new(inner: Vec<(ContentIdx, u32)>) -> Self {
+        Self {
+            inner,
+            sort_end: 0,
+            next_idx: 0,
+        }
+    }
+
+    fn sort_next_block(&mut self) {
+        const BLOCK_SIZE: usize = 8192;
+        let block_start = self.sort_end;
+        let block_end = (self.sort_end + BLOCK_SIZE).min(self.inner.len());
+        if block_end == self.sort_end + BLOCK_SIZE {
+            self.inner[block_start..].select_nth_unstable(BLOCK_SIZE);
+        }
+        radsort::sort_by_key(&mut self.inner[block_start..block_end], |(idx, _)| {
+            u32::from(*idx)
+        });
+        self.sort_end = block_end;
+    }
+}
+
+impl Iterator for SortingIterator {
+    type Item = (ContentIdx, u32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_idx >= self.inner.len() {
+            return None;
+        } else if self.next_idx >= self.sort_end {
+            self.sort_next_block()
+        }
+        let res = self.inner[self.next_idx];
+        self.next_idx += 1;
+        Some(res)
+    }
+}
+
 struct ExactDocIter {
     candidates: Peekable<ConcatIterator>,
     doc_ends: Arc<DocEnds>,
@@ -251,7 +274,7 @@ struct ExactDocIter {
 }
 
 impl ExactDocIter {
-    fn new(docs: CachedDocs, matched_indexes: Vec<Vec<(ContentIdx, usize)>>) -> Self {
+    fn new(docs: CachedDocs, matched_indexes: Vec<SortingIterator>) -> Self {
         Self {
             doc_ends: docs.read_doc_ends(),
             docs,
@@ -274,9 +297,9 @@ impl Iterator for ExactDocIter {
             content: self.docs.read_content(doc_id, &self.doc_ends),
         };
 
-        let mut add_match = |idx: ContentIdx, len: usize| {
+        let mut add_match = |idx: ContentIdx, len: u32| {
             let start = u32::from(idx - doc_range.start);
-            let end = start + len as u32;
+            let end = start + len;
             // Filter out matches that cross doc boundaries
             if end <= u32::from(doc_range.end) {
                 res.matches.push(start..end);
@@ -514,10 +537,9 @@ where
 
         let tx = self.senders[idx].clone();
         let f = self.f.clone();
-        // TODO it would be best to pass in a scope here so we can propagate panics.
         self.scope.spawn_fifo(move |_| {
             let r = f(next_input);
-            tx.send(r).expect("channel should always be sendable");
+            tx.send(r).ok();
         });
     }
 }
