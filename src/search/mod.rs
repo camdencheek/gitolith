@@ -46,6 +46,7 @@ pub fn search_regex<'a>(
         extract_regex_literals(hir)
     };
 
+    let extracted = extracted.to_lower_ascii();
     let optimized = optimize_extracted(extracted);
     match optimized {
         OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s, scope)),

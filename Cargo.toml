@@ -10,8 +10,8 @@ clap = { version = "3.2.12", features = ["derive"]}
 itertools = "0.10.3"
 rayon = "1.5.3"
 regex = "1.6.0"
-regex-syntax = {path = "../regex/regex-syntax"}
-suffix = { path = "../suffix" }
+regex-syntax = "0.6" 
+suffix = { path = "./vendor/suffix" }
 walkdir = "2.3.2"
 thiserror = "1.0.31"
 memmap2 = "0.5.5"

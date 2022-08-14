@@ -245,6 +245,7 @@ pub enum ReadTrigramPointersError {
 #[cfg(test)]
 mod test {
     use super::*;
+    use suffix::table;
 
     fn concat_strs(input: &[&str]) -> Vec<u8> {
         let mut content = Vec::new();
@@ -261,8 +262,8 @@ mod test {
 
     fn new_sa(content: &[u8]) -> Vec<u32> {
         let mut sa = vec![0u32; content.len()];
-        let mut stypes = suffix::SuffixTypes::new(sa.len() as u32);
-        let mut bins = suffix::Bins::new();
+        let mut stypes = table::SuffixTypes::new(sa.len() as u32);
+        let mut bins = table::Bins::new();
         suffix::sais(sa.as_mut(), &mut stypes, &mut bins, &suffix::Utf8(content));
         sa
     }

@@ -1,4 +1,4 @@
-const CASE_TRANSFORM_MAP: [u8; 256] = [
+pub const CASE_TRANSFORM_MAP: [u8; 256] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
     0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
@@ -17,35 +17,46 @@ const CASE_TRANSFORM_MAP: [u8; 256] = [
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
 ];
 
-pub struct CaseInsensitiveSlice<'a>(&'a [u8]);
+#[inline]
+pub fn ascii_lower(c: u8) -> u8 {
+    CASE_TRANSFORM_MAP[c as usize]
+}
 
-impl<'a> std::cmp::Ord for CaseInsensitiveSlice<'a> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
+pub struct AsciiLowerIter<T> {
+    inner: T,
+}
 
-        for (&a, &b) in self.0.iter().zip(other.0.iter()) {
-            match CASE_TRANSFORM_MAP[a as usize].cmp(&CASE_TRANSFORM_MAP[b as usize]) {
-                Ordering::Less => return Ordering::Less,
-                Ordering::Greater => return Ordering::Greater,
-                _ => {}
-            }
-        }
-
-        self.0.len().cmp(&other.0.len())
+impl<T> AsciiLowerIter<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
     }
 }
 
-impl<'a> std::cmp::PartialOrd for CaseInsensitiveSlice<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+impl<T> Iterator for AsciiLowerIter<T>
+where
+    T: Iterator<Item = u8>,
+{
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(ascii_lower(self.inner.next()?))
     }
 }
 
-impl<'a> std::cmp::PartialEq for CaseInsensitiveSlice<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        use std::cmp::Ordering;
-        matches!(self.cmp(other), Ordering::Equal)
+impl<T> DoubleEndedIterator for AsciiLowerIter<T>
+where
+    T: DoubleEndedIterator<Item = u8>,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some(self.inner.next_back()?)
     }
 }
 
-impl<'a> std::cmp::Eq for CaseInsensitiveSlice<'a> {}
+impl<T> ExactSizeIterator for AsciiLowerIter<T>
+where
+    T: ExactSizeIterator<Item = u8>,
+{
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}

@@ -1,6 +1,8 @@
 use itertools::Itertools;
 use regex_syntax::hir::{self, Hir};
 
+use crate::strcmp;
+
 #[derive(Clone, Debug)]
 pub enum ExtractedRegexLiterals {
     /// An exact extraction indicates that every prefix yielded by the iterator is an exact match to
@@ -21,6 +23,25 @@ pub enum ExtractedRegexLiterals {
     None,
 }
 
+impl ExtractedRegexLiterals {
+    pub fn to_lower_ascii(&self) -> Self {
+        match self {
+            Self::Exact(cls) => {
+                let (cls, exact) = cls.to_lower_ascii();
+                if exact {
+                    Self::Exact(cls)
+                } else {
+                    Self::Inexact(vec![cls])
+                }
+            }
+            Self::Inexact(clss) => {
+                Self::Inexact(clss.iter().map(|cls| cls.to_lower_ascii().0).collect())
+            }
+            Self::None => Self::None,
+        }
+    }
+}
+
 /// A concatenation of LiteralSets.
 #[derive(Clone, Debug)]
 pub struct ConcatLiteralSet(Vec<LiteralSet>);
@@ -38,6 +59,20 @@ impl ConcatLiteralSet {
 
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn to_lower_ascii(&self) -> (Self, bool) {
+        let mut all_exact = true;
+        let new = self
+            .0
+            .iter()
+            .map(|ls| {
+                let (ls, exact) = ls.to_ascii_lower();
+                all_exact &= exact;
+                ls
+            })
+            .collect();
+        (Self(new), all_exact)
     }
 
     pub fn as_ref(&self) -> &[LiteralSet] {
@@ -85,6 +120,112 @@ impl LiteralSet {
                 .map(|range| (range.end() as u32 - range.start() as u32) as usize + 1)
                 .sum(),
             Alternation(v) => v.iter().map(|s| s.cardinality()).sum(),
+        }
+    }
+
+    pub fn to_ascii_lower(&self) -> (Self, bool) {
+        use hir::{ClassBytes, ClassBytesRange, ClassUnicode, ClassUnicodeRange};
+        use LiteralSet::*;
+
+        match self {
+            Byte(b @ b'A'..=b'Z') => (Byte(b.to_ascii_lowercase()), false),
+            Byte(b @ b'a'..=b'z') => (Byte(*b), false),
+            Byte(b) => (Byte(*b), true),
+
+            Unicode(c @ 'A'..='Z') => (Unicode(c.to_ascii_lowercase()), false),
+            Unicode(c @ 'a'..='z') => (Unicode(*c), false),
+            Unicode(c) => (Unicode(*c), true),
+
+            ByteClass(bc) => {
+                let mut class = ClassBytes::new(bc.clone());
+
+                let uppers = ClassBytes::new([ClassBytesRange::new(b'A', b'Z')]);
+                let lowers = ClassBytes::new([ClassBytesRange::new(b'a', b'z')]);
+
+                let uppers_in_class = {
+                    let mut u = uppers.clone();
+                    u.intersect(&class);
+                    u
+                };
+
+                let lowers_in_class = {
+                    let mut l = lowers.clone();
+                    l.intersect(&class);
+                    l
+                };
+
+                let uppers_in_class_as_lowers =
+                    ClassBytes::new(uppers_in_class.clone().iter().map(|cls| {
+                        hir::ClassBytesRange::new(
+                            cls.start().to_ascii_lowercase(),
+                            cls.end().to_ascii_lowercase(),
+                        )
+                    }));
+
+                let uppers_and_lowers_are_equivalent = {
+                    let mut l = lowers_in_class.clone();
+                    l.symmetric_difference(&uppers_in_class_as_lowers);
+                    l.ranges().len() == 0
+                };
+
+                class.difference(&uppers_in_class);
+                class.union(&uppers_in_class_as_lowers);
+                (
+                    ByteClass(class.ranges().to_vec()),
+                    uppers_and_lowers_are_equivalent,
+                )
+            }
+            UnicodeClass(uc) => {
+                let mut class = ClassUnicode::new(uc.clone());
+
+                let uppers = ClassUnicode::new([ClassUnicodeRange::new('A', 'Z')]);
+                let lowers = ClassUnicode::new([ClassUnicodeRange::new('a', 'z')]);
+
+                let uppers_in_class = {
+                    let mut u = uppers.clone();
+                    u.intersect(&class);
+                    u
+                };
+
+                let lowers_in_class = {
+                    let mut l = lowers.clone();
+                    l.intersect(&class);
+                    l
+                };
+
+                let uppers_in_class_as_lowers =
+                    ClassUnicode::new(uppers_in_class.clone().iter().map(|cls| {
+                        hir::ClassUnicodeRange::new(
+                            cls.start().to_ascii_lowercase(),
+                            cls.end().to_ascii_lowercase(),
+                        )
+                    }));
+
+                let uppers_and_lowers_are_equivalent = {
+                    let mut l = lowers_in_class.clone();
+                    l.symmetric_difference(&uppers_in_class_as_lowers);
+                    l.ranges().len() == 0
+                };
+
+                class.difference(&uppers_in_class);
+                class.union(&uppers_in_class_as_lowers);
+                (
+                    UnicodeClass(class.ranges().to_vec()),
+                    uppers_and_lowers_are_equivalent,
+                )
+            }
+            Alternation(v) => {
+                let mut all_exact = true;
+                let v = v
+                    .iter()
+                    .map(|cls| {
+                        let (cls, exact) = cls.to_lower_ascii();
+                        all_exact &= exact;
+                        cls
+                    })
+                    .collect();
+                (Alternation(v), all_exact)
+            }
         }
     }
 
