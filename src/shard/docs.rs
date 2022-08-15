@@ -5,7 +5,6 @@ use std::io;
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
-use sucds::elias_fano::EliasFano;
 
 #[derive(
     Copy, Clone, AddAssign, Add, Sub, PartialEq, Mul, From, Into, PartialOrd, Debug, Eq, Hash,
@@ -97,6 +96,7 @@ impl DocStore {
 #[derive(Debug)]
 pub struct DocEnds(Vec<ContentIdx>);
 
+// TODO consider compressing doc ends with Elias Fano to minimize memory impact.
 impl DocEnds {
     pub fn new(v: Vec<ContentIdx>) -> Self {
         Self(v)
@@ -133,48 +133,8 @@ impl DocEnds {
         self.0[usize::from(doc)]
     }
 
-    pub fn compress(&self) -> CompressedDocEnds {
-        CompressedDocEnds(
-            EliasFano::from_ints(
-                &self
-                    .0
-                    .iter()
-                    .map(|&idx| idx.0 as usize)
-                    .collect::<Vec<usize>>(),
-            )
-            .unwrap()
-            .enable_rank(),
-        )
-    }
-
     pub fn max_doc_id(&self) -> DocID {
         DocID(self.0.len() as u32 - 1)
-    }
-}
-
-// TODO determine whether this is actually worth using
-pub struct CompressedDocEnds(EliasFano);
-
-impl CompressedDocEnds {
-    pub fn new(e: EliasFano) -> Self {
-        Self(e)
-    }
-
-    // Returns the id of the document that contains the given content offset.
-    pub fn container(&self, offset: ContentIdx) -> DocID {
-        DocID(self.0.rank(u32::from(offset) as usize) as u32)
-    }
-
-    // Returns the range (relative to the beginning of the content block) that
-    // represents the content of the document with the given id.
-    pub fn content_range(&self, id: DocID) -> Range<ContentIdx> {
-        let start = if id == DocID(0) {
-            ContentIdx(0)
-        } else {
-            ContentIdx(self.0.select(u32::from(id) as usize - 1) as u32)
-        };
-        let end = ContentIdx(self.0.select(u32::from(id) as usize) as u32);
-        start..end
     }
 }
 
@@ -255,7 +215,6 @@ mod test {
             ContentIdx(20),
             ContentIdx(100),
         ]);
-        let compressed = doc_ends.compress();
 
         let tests = vec![
             (DocID(0), ContentIdx(0)..ContentIdx(1)),
@@ -269,7 +228,6 @@ mod test {
 
         for (doc_id, expected_range) in tests {
             assert_eq!(doc_ends.content_range(doc_id), expected_range);
-            assert_eq!(compressed.content_range(doc_id), expected_range);
         }
     }
 }

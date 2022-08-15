@@ -1,9 +1,9 @@
 use super::docs::DocID;
-use super::suffix::{SuffixBlock, TrigramPointers};
+use super::suffix::SuffixBlock;
 use super::{Shard, ShardHeader};
 use crate::strcmp::AsciiLowerIter;
 use anyhow::Error;
-use memmap2::{Mmap, MmapMut};
+use memmap2::MmapMut;
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::FileExt;
@@ -55,7 +55,7 @@ impl ShardBuilder {
     pub fn build(mut self) -> Result<Shard, Error> {
         let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
         let (doc_starts_ptr, doc_starts_len) = Self::build_docs(&mut self.file, &self.doc_ends)?;
-        let (suffix_ptr, suffix_len, trigram_ptr, trigram_len) =
+        let (suffix_ptr, suffix_len) =
             Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
         Self::build_header(
             &self.file,
@@ -65,8 +65,6 @@ impl ShardBuilder {
             doc_starts_len.into(),
             suffix_ptr,
             suffix_len.into(),
-            trigram_ptr,
-            trigram_len,
         )?;
         Ok(Shard::from_file(self.file)?)
     }
@@ -95,23 +93,9 @@ impl ShardBuilder {
         file: &mut File,
         content_ptr: u64,
         content_len: u32,
-    ) -> Result<(u64, u32, u64, u64), Error> {
-        let (pointers_start, pointers_len) = {
-            let mmap = unsafe { Mmap::map(&*file)? };
-            let content_data =
-                &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
-
-            let pointers = TrigramPointers::from_content(content_data).compress();
-            let pointers_start = file.seek(SeekFrom::Current(0))?;
-            let mut buf = Vec::new(); // TODO allocate this to the right capacity
-            let pointers_len = pointers.serialize_into(&mut buf)?;
-            file.write_all(&buf)?;
-            (pointers_start, pointers_len)
-        };
-
+    ) -> Result<(u64, u32), Error> {
         let sa_start = {
             let current_position = file.seek(io::SeekFrom::Current(0))?;
-            assert!(current_position == pointers_start + pointers_len as u64);
 
             // Round up to the nearest block size so we have aligned blocks for our suffix array
             let sa_start = next_multiple_of(current_position, SuffixBlock::SIZE_BYTES as u64);
@@ -138,7 +122,7 @@ impl ShardBuilder {
             table::sais(sa, &mut stypes, &mut bins, &CIBytes(content_data));
             sa_start
         };
-        Ok((sa_start, content_len, pointers_start, pointers_len as u64))
+        Ok((sa_start, content_len))
     }
 
     fn build_header(
@@ -149,8 +133,6 @@ impl ShardBuilder {
         doc_ends_len: u64,
         sa_ptr: u64,
         sa_len: u64,
-        trigrams_ptr: u64,
-        trigrams_len: u64,
     ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
@@ -162,8 +144,6 @@ impl ShardBuilder {
             doc_ends_len,
             sa_ptr,
             sa_len,
-            trigrams_ptr,
-            trigrams_len,
         };
         file.write_all_at(&header.to_bytes(), 0)?;
         Ok(header)

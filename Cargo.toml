@@ -16,7 +16,6 @@ walkdir = "2.3.2"
 thiserror = "1.0.31"
 memmap2 = "0.5.5"
 derive_more = "0.99.17"
-sucds = "0.4.0"
 anyhow = "1.0.58"
 crossbeam = {version = "0.8.2", features = ["crossbeam-channel"]}
 bitvec = "1.0.1"

@@ -55,13 +55,8 @@ impl Shard {
             header.doc_ends_ptr,
             header.doc_ends_len as u32,
         );
-        let suffixes = SuffixArrayStore::new(
-            Arc::clone(&file),
-            header.sa_ptr,
-            header.sa_len as u32,
-            header.trigrams_ptr,
-            header.trigrams_len,
-        );
+        let suffixes =
+            SuffixArrayStore::new(Arc::clone(&file), header.sa_ptr, header.sa_len as u32);
 
         Ok(Self {
             header,
@@ -82,8 +77,6 @@ pub struct ShardHeader {
     pub doc_ends_len: u64,
     pub sa_ptr: u64,
     pub sa_len: u64,
-    pub trigrams_ptr: u64,
-    pub trigrams_len: u64,
 }
 
 impl ShardHeader {
@@ -103,8 +96,6 @@ impl ShardHeader {
         buf.write_all(&self.doc_ends_len.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_len.to_le_bytes()).unwrap();
-        buf.write_all(&self.trigrams_ptr.to_le_bytes()).unwrap();
-        buf.write_all(&self.trigrams_len.to_le_bytes()).unwrap();
         buf
     }
 
@@ -119,8 +110,6 @@ impl ShardHeader {
             doc_ends_len: u64::from_le_bytes(buf[32..40].try_into()?),
             sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
             sa_len: u64::from_le_bytes(buf[48..56].try_into()?),
-            trigrams_ptr: u64::from_le_bytes(buf[56..64].try_into()?),
-            trigrams_len: u64::from_le_bytes(buf[64..72].try_into()?),
         })
     }
 }
@@ -137,8 +126,6 @@ impl Default for ShardHeader {
             doc_ends_len: 0,
             sa_ptr: 0,
             sa_len: 0,
-            trigrams_ptr: 0,
-            trigrams_len: 0,
         }
     }
 }

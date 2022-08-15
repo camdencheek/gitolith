@@ -11,7 +11,7 @@ use crate::{
 use super::{
     content::ContentIdx,
     docs::{DocEnds, DocID, DocStore},
-    suffix::{CompressedTrigramPointers, SuffixArrayStore, SuffixBlock, SuffixBlockID, SuffixIdx},
+    suffix::{SuffixArrayStore, SuffixBlock, SuffixBlockID, SuffixIdx},
     Shard, ShardID,
 };
 
@@ -147,34 +147,17 @@ impl CachedSuffixes {
         SuffixBlockIterator::new(self.clone(), range)
     }
 
-    pub fn lookup_literal_range<T>(
-        &self,
-        trigrams: &Arc<CompressedTrigramPointers>,
-        prefix_range: RangeInclusive<T>,
-    ) -> Range<SuffixIdx>
+    pub fn lookup_literal_range<T>(&self, prefix_range: RangeInclusive<T>) -> Range<SuffixIdx>
     where
         T: AsRef<[u8]> + Eq,
     {
-        let start_bounds = trigrams.bounds(prefix_range.start()..=prefix_range.start());
-        let end_bounds = trigrams.bounds(prefix_range.end()..=prefix_range.end());
-
-        if start_bounds.start == end_bounds.end {
-            // Return early if there are no trigrams that match
-            return start_bounds.start..end_bounds.end;
-        }
-
         let (start, end) = prefix_range.into_inner();
-        let start_bound = self.partition_by_literal(start, false, start_bounds);
-        let end_bound = self.partition_by_literal(end, true, start_bound..end_bounds.end);
+        let start_bound = self.partition_by_literal(start, false);
+        let end_bound = self.partition_by_literal(end, true);
         start_bound..end_bound
     }
 
-    fn partition_by_literal<T>(
-        &self,
-        prefix: T,
-        include_equal: bool,
-        bounds: Range<SuffixIdx>,
-    ) -> SuffixIdx
+    fn partition_by_literal<T>(&self, prefix: T, include_equal: bool) -> SuffixIdx
     where
         T: AsRef<[u8]>,
     {
@@ -202,10 +185,10 @@ impl CachedSuffixes {
             return include_equal;
         };
 
-        self.partition_by_content_idx(pred, bounds)
+        self.partition_by_content_idx(pred)
     }
 
-    fn partition_by_content_idx<T>(&self, mut pred: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    fn partition_by_content_idx<T>(&self, mut pred: T) -> SuffixIdx
     where
         T: FnMut(ContentIdx) -> bool,
     {
@@ -236,14 +219,14 @@ impl CachedSuffixes {
             pred(content_idx)
         };
 
-        self.partition_by_suffix_idx(suffix_pred, bounds)
+        self.partition_by_suffix_idx(suffix_pred)
     }
 
-    fn partition_by_suffix_idx<T>(&self, mut pred: T, bounds: Range<SuffixIdx>) -> SuffixIdx
+    fn partition_by_suffix_idx<T>(&self, mut pred: T) -> SuffixIdx
     where
         T: FnMut(SuffixIdx) -> bool,
     {
-        let (mut min, mut max) = (bounds.start, bounds.end);
+        let (mut min, mut max) = (SuffixIdx(0), SuffixIdx(self.suffixes.sa_len));
 
         while min < max {
             let mid = SuffixIdx((u32::from(max) - u32::from(min)) / 2 + u32::from(min));
@@ -273,26 +256,6 @@ impl CachedSuffixes {
         match value {
             CacheValue::SuffixBlock(b) => b,
             _ => unreachable!(),
-        }
-    }
-
-    pub fn read_trigram_pointers(&self) -> Arc<CompressedTrigramPointers> {
-        let key = CacheKey::TrigramPointers(self.shard_id);
-        let value = if let Some(v) = self.cache.get(&key) {
-            v.value().clone()
-        } else {
-            let v = CacheValue::TrigramPointers(Arc::new(
-                self.suffixes
-                    .read_trigram_pointers()
-                    .expect("failed to read trigram pointers"),
-            ));
-            self.cache.insert(key, v.clone(), 0);
-            v
-        };
-
-        match value {
-            CacheValue::TrigramPointers(tp) => tp,
-            _ => unimplemented!(),
         }
     }
 }
@@ -363,7 +326,6 @@ pub struct SuffixRangeIterator {
     states: <Range<usize> as IntoIterator>::IntoIter,
     range_set: ConcatLiteralSet,
     suffixes: CachedSuffixes,
-    trigrams: Arc<CompressedTrigramPointers>,
     buf: Vec<u8>,
 }
 
@@ -372,7 +334,6 @@ impl SuffixRangeIterator {
         Self {
             states: (0..range_set.cardinality()),
             range_set,
-            trigrams: suffixes.read_trigram_pointers(),
             suffixes,
             buf: Vec::new(),
         }
@@ -388,8 +349,7 @@ impl Iterator for SuffixRangeIterator {
         self.range_set.write_nth_literal_to(state, &mut self.buf);
 
         Some((
-            self.suffixes
-                .lookup_literal_range(&self.trigrams, &self.buf..=&self.buf),
+            self.suffixes.lookup_literal_range(&self.buf..=&self.buf),
             self.buf.len(),
         ))
     }
