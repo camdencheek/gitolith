@@ -77,12 +77,12 @@ fn new_exact_match_iterator<'a>(
             .iter()
             .map(|(range, _)| u32::from(range.end - range.start) as usize)
             .sum();
-        if content_idx_count > (1 << 19) {
+        if content_idx_count > (1 << 18) {
             // If the number of candidate matches is very high, fall
             // back to inexact matching, which will require a regex recheck
             // but does not require collecting the candidate set in memory.
-            // TODO tune this. Collecting the indexes in memory and sorting them
-            // could be catastrophically expensive for common patterns.
+            // TODO tune this. Collecting the content indexes in memory could
+            // cause an OOM. Consider allocating this vec in a mmap.
             return Ok(new_inexact_match_iterator(
                 Regex::new(query)?,
                 shard,

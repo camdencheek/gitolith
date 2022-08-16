@@ -150,7 +150,7 @@ impl ShardBuilder {
     }
 }
 
-// TODO use u64::next_multiple_of() when #88581 stabilizes
+// NOTE: we can use u64::next_multiple_of() when #88581 stabilizes
 fn next_multiple_of(lhs: u64, rhs: u64) -> u64 {
     match lhs % rhs {
         0 => lhs,

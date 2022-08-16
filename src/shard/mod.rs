@@ -84,7 +84,6 @@ impl ShardHeader {
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_COMPLETE: u16 = 1 << 0;
 
-    // TODO add a first character index
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
         buf.write_all(&self.version.to_le_bytes()).unwrap();

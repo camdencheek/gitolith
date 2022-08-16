@@ -17,7 +17,6 @@ pub fn optimize_extracted(extracted: ExtractedRegexLiterals) -> OptimizedLiteral
     }
 }
 
-// TODO take selectivity into account?
 fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
     let cardinality_limit = 4096; // TODO tune this parameter
 

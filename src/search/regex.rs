@@ -381,7 +381,7 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
 // TODO this function can probably be simplified
 fn split_unicode_ranges(ranges: &[hir::ClassUnicodeRange]) -> Vec<hir::ClassUnicodeRange> {
     fn char_unchecked(c: u32) -> char {
-        // TODO use char::from_u32_unchecked once #89259 stabilizes
+        // NOTE: we can use char::from_u32_unchecked once #89259 stabilizes
         char::from_u32(c).unwrap()
     }
     let one_byte_min_char: char = char_unchecked(0x0000);
