@@ -61,7 +61,7 @@ impl CachedDocs {
         self.docs.doc_ids()
     }
 
-    pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Arc<Vec<u8>> {
+    pub fn get_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Arc<Vec<u8>> {
         let key = CacheKey::DocContent(self.shard_id, doc_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
@@ -81,7 +81,7 @@ impl CachedDocs {
         }
     }
 
-    pub fn read_doc_ends(&self) -> Arc<DocEnds> {
+    pub fn get_doc_ends(&self) -> Arc<DocEnds> {
         let key = CacheKey::DocEnds(self.shard_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
@@ -162,7 +162,7 @@ impl CachedSuffixes {
         T: AsRef<[u8]>,
     {
         use std::cmp::Ordering::*;
-        let doc_ends = self.docs.read_doc_ends();
+        let doc_ends = self.docs.get_doc_ends();
 
         let pred = |content_idx| {
             let mut prefix_slice: &[u8] = prefix.as_ref();
@@ -300,7 +300,7 @@ impl<'a, 'b> Iterator for ContiguousContentIterator<'a, 'b> {
 
         let next_doc_id = self.doc_ends.find(self.range.start);
         let next_doc_range = self.doc_ends.content_range(next_doc_id);
-        let doc_content = self.docs.read_content(next_doc_id, self.doc_ends);
+        let doc_content = self.docs.get_content(next_doc_id, self.doc_ends);
 
         if next_doc_range.end < self.range.end {
             let res = Some((

@@ -111,7 +111,7 @@ fn new_inexact_match_iterator<'a>(
     literals: Vec<ConcatLiteralSet>,
     scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
-    let doc_ends = shard.docs().read_doc_ends();
+    let doc_ends = shard.docs().get_doc_ends();
     let suffixes = shard.suffixes();
     let docs = Arc::new(shard.docs());
 
@@ -130,7 +130,7 @@ fn new_inexact_match_iterator<'a>(
         .collect();
     let filtered = AndDocIterator::new(content_idx_iters)
         .par_map(scope, 32, move |doc_id| -> DocMatch {
-            let content = docs.read_content(doc_id, &doc_ends);
+            let content = docs.get_content(doc_id, &doc_ends);
             let matched_ranges: Vec<Range<u32>> = re
                 .find_iter(&content)
                 .map(|m| m.start() as u32..m.end() as u32)
@@ -151,14 +151,14 @@ fn new_unindexed_match_iterator<'a>(
     shard: CachedShard,
     scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
-    let doc_ends = shard.docs().read_doc_ends();
+    let doc_ends = shard.docs().get_doc_ends();
     let doc_ids = shard.docs().doc_ids();
     let re = Arc::new(re);
     let docs = Arc::new(shard.docs());
     Box::new(
         doc_ids
             .par_map(scope, 128, move |doc_id| -> DocMatch {
-                let content = docs.read_content(doc_id, &doc_ends);
+                let content = docs.get_content(doc_id, &doc_ends);
                 let matched_ranges: Vec<Range<u32>> = re
                     .find_iter(&content)
                     .map(|m| m.start() as u32..m.end() as u32)
@@ -276,7 +276,7 @@ struct ExactDocIter {
 impl ExactDocIter {
     fn new(docs: CachedDocs, matched_indexes: Vec<SortingIterator>) -> Self {
         Self {
-            doc_ends: docs.read_doc_ends(),
+            doc_ends: docs.get_doc_ends(),
             docs,
             candidates: ConcatIterator::new(matched_indexes).peekable(),
         }
@@ -294,7 +294,7 @@ impl Iterator for ExactDocIter {
         let mut res = DocMatch {
             id: doc_id,
             matches: Vec::with_capacity(1),
-            content: self.docs.read_content(doc_id, &self.doc_ends),
+            content: self.docs.get_content(doc_id, &self.doc_ends),
         };
 
         let mut add_match = |idx: ContentIdx, len: u32| {
