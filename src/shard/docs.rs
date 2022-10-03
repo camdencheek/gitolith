@@ -1,4 +1,4 @@
-use super::file::{ShardBackend, ShardFile, ShardStore};
+use super::file::ShardStore;
 use anyhow::Error;
 use derive_more::{Add, AddAssign, From, Into, Mul, Sub};
 use std::ops::Range;

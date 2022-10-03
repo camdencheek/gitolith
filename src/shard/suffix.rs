@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::docs::ContentIdx;
-use super::file::{ShardBackend, ShardFile, ShardStore};
+use super::file::ShardStore;
 
 #[derive(
     Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,

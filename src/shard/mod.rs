@@ -5,13 +5,9 @@ pub mod docs;
 pub mod file;
 pub mod suffix;
 
-use bytes::Buf;
-use file::ShardHeader;
-
-use self::file::{ReadWriteStream, ShardBackend, ShardFile, ShardStore};
+use self::file::{ShardFile, ShardStore};
 use anyhow::Error;
 use std::fs::File;
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 // use super::cache::Cache;
