@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod cached;
+pub mod cached_file;
 pub mod docs;
 pub mod file;
 pub mod suffix;

@@ -87,9 +87,8 @@ impl CachedDocs {
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::DocEnds(Arc::new(
-                self.docs.read_doc_ends().expect("failed to read doc ends"),
-            ));
+            let v =
+                CacheValue::DocEnds(self.docs.read_doc_ends().expect("failed to read doc ends"));
             self.cache.insert(key, v.clone(), 0);
             v
         };

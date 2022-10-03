@@ -23,12 +23,16 @@ impl From<SuffixBlockID> for u64 {
 }
 
 #[derive(Debug)]
-pub struct SuffixBlock(pub Box<[ContentIdx]>);
+pub struct SuffixBlock(pub [ContentIdx; Self::SIZE_SUFFIXES]);
 
 impl SuffixBlock {
     // 2048 is chosen so SIZE_BYTES is 8192, which is a pretty standard page size.
     pub const SIZE_SUFFIXES: usize = 2048;
     pub const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
+
+    pub fn new() -> Self {
+        Self([ContentIdx(0); Self::SIZE_SUFFIXES])
+    }
 }
 
 #[derive(Clone)]
@@ -73,7 +77,7 @@ impl SuffixArrayStore {
         )
     }
 
-    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, Error> {
+    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
         self.file.read_suffix_block(block_id)
     }
 }

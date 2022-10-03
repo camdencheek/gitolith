@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     os::unix::prelude::FileExt,
+    sync::Arc,
 };
 
 use anyhow::Error;
@@ -20,7 +21,7 @@ pub struct ShardFile {
 }
 
 impl ShardFile {
-    pub fn read_doc_ends(&self) -> Result<DocEnds, Error> {
+    pub fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
         let mut buf = vec![0u8; self.header.docs.offsets.len as usize];
         self.file
             .read_exact_at(&mut buf, self.header.docs.offsets.offset)?;
@@ -28,38 +29,38 @@ impl ShardFile {
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
         assert!(chunks.remainder().len() == 0);
 
-        Ok(DocEnds::new(
+        Ok(Arc::new(DocEnds::new(
             chunks
                 .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
                 .map(ContentIdx::from)
                 .collect(),
-        ))
+        )))
     }
 
-    pub fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Box<[u8]>, Error> {
+    pub fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
         let range = doc_ends.content_range(doc_id);
         let doc_start = self.header.docs.data.offset + u64::from(range.start);
         let doc_len = usize::from(range.end) - usize::from(range.start);
         let mut buf = vec![0u8; doc_len];
         self.file.read_exact_at(&mut buf, doc_start)?;
-        Ok(buf.into_boxed_slice())
+        Ok(buf.into())
     }
 
-    pub fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, Error> {
+    pub fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
         let block_start =
             self.header.sa.offset + u64::from(block_id) * SuffixBlock::SIZE_BYTES as u64;
-        let mut buf = vec![0u8; SuffixBlock::SIZE_BYTES];
+        let mut buf = [0u8; SuffixBlock::SIZE_BYTES];
         self.file.read_exact_at(&mut buf, block_start)?;
 
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
         assert!(chunks.remainder().len() == 0);
 
-        Ok(SuffixBlock(
-            chunks
-                .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
-                .map(ContentIdx::from)
-                .collect(),
-        ))
+        let mut block = Arc::new(SuffixBlock::new());
+        let block_ref = Arc::get_mut(&mut block).unwrap();
+        for (i, chunk) in chunks.enumerate() {
+            block_ref.0[i] = ContentIdx(u32::from_le_bytes(chunk.try_into()?));
+        }
+        Ok(block)
     }
 }
 
