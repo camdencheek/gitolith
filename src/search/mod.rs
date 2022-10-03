@@ -16,13 +16,12 @@ use crate::shard::suffix::{
 };
 use crate::shard::Shard;
 
-use self::optimize::OptimizedLiterals;
-use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals};
-
 mod optimize;
 pub mod regex;
 
+use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals};
 use optimize::optimize_extracted;
+use optimize::OptimizedLiterals;
 
 #[derive(Clone)]
 pub struct DocMatch {
@@ -38,6 +37,7 @@ pub fn search_regex<'a>(
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
     let ast = regex_syntax::ast::parse::Parser::new().parse(query)?;
     let hir = regex_syntax::hir::translate::Translator::new().translate(query, &ast)?;
+    let re = Regex::new(query)?;
 
     let extracted = if skip_index {
         ExtractedRegexLiterals::None
@@ -48,19 +48,17 @@ pub fn search_regex<'a>(
     let extracted = extracted.to_lower_ascii();
     let optimized = optimize_extracted(extracted);
     match optimized {
-        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s)),
-        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(query, s, set),
-        OptimizedLiterals::Inexact(all) => {
-            Ok(new_inexact_match_iterator(Regex::new(query)?, s, all))
-        }
+        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(re, s)),
+        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(re, s, set),
+        OptimizedLiterals::Inexact(all) => Ok(new_inexact_match_iterator(re, s, all)),
     }
 }
 
-fn new_exact_match_iterator<'a>(
-    query: &str,
+fn new_exact_match_iterator(
+    re: Regex,
     shard: Shard,
     literals: Vec<ConcatLiteralSet>,
-) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
+) -> Result<Box<dyn Iterator<Item = DocMatch>>, Error> {
     let suffixes = shard.suffixes();
 
     let mut all_content_indexes = Vec::with_capacity(literals.len());
@@ -78,11 +76,7 @@ fn new_exact_match_iterator<'a>(
             // but does not require collecting the candidate set in memory.
             // TODO tune this. Collecting the content indexes in memory could
             // cause an OOM. Consider allocating this vec in a mmap.
-            return Ok(new_inexact_match_iterator(
-                Regex::new(query)?,
-                shard,
-                literals,
-            ));
+            return Ok(new_inexact_match_iterator(re, shard, literals));
         }
         let mut content_indexes: Vec<(ContentIdx, u32)> = Vec::with_capacity(content_idx_count);
         for (range, len) in suf_ranges.into_iter() {
