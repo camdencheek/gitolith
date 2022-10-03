@@ -57,7 +57,7 @@ impl Shard {
             header.doc_ends.len as u32,
         );
         let suffixes =
-            SuffixArrayStore::new(Arc::clone(&file), header.sa_ptr, header.sa_len as u32);
+            SuffixArrayStore::new(Arc::clone(&file), header.sa.offset, header.sa.len as u32);
 
         Ok(Self {
             header,
@@ -73,8 +73,7 @@ pub struct ShardHeader {
     pub flags: u32,
     pub content: SimpleSection,
     pub doc_ends: SimpleSection,
-    pub sa_ptr: u64,
-    pub sa_len: u64,
+    pub sa: SimpleSection,
 }
 
 impl ShardHeader {
@@ -88,8 +87,7 @@ impl ShardHeader {
         self.flags.write_to(&mut buf).unwrap();
         self.content.write_to(&mut buf).unwrap();
         self.doc_ends.write_to(&mut buf).unwrap();
-        buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
-        buf.write_all(&self.sa_len.to_le_bytes()).unwrap();
+        self.sa.write_to(&mut buf).unwrap();
         buf.into_inner()
     }
 
@@ -106,8 +104,10 @@ impl ShardHeader {
                 offset: u64::from_le_bytes(buf[24..32].try_into()?),
                 len: u64::from_le_bytes(buf[32..40].try_into()?),
             },
-            sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
-            sa_len: u64::from_le_bytes(buf[48..56].try_into()?),
+            sa: SimpleSection {
+                offset: u64::from_le_bytes(buf[40..48].try_into()?),
+                len: u64::from_le_bytes(buf[48..56].try_into()?),
+            },
         })
     }
 }
@@ -119,8 +119,7 @@ impl Default for ShardHeader {
             flags: 0,
             content: SimpleSection::default(),
             doc_ends: SimpleSection::default(),
-            sa_ptr: 0,
-            sa_len: 0,
+            sa: SimpleSection::default(),
         }
     }
 }

@@ -145,8 +145,10 @@ impl ShardBuilder {
                 offset: doc_ends_ptr,
                 len: doc_ends_len,
             },
-            sa_ptr,
-            sa_len,
+            sa: SimpleSection {
+                offset: sa_ptr,
+                len: sa_len,
+            },
         };
         file.write_all_at(&header.to_bytes(), 0)?;
         Ok(header)
