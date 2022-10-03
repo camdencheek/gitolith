@@ -67,10 +67,10 @@ impl ShardBuilder {
             suffix_ptr,
             suffix_len.into(),
         )?;
-        Ok(Shard::from_file(self.file)?)
+        Shard::from_file(self.file)
     }
 
-    fn build_content(doc_ends: &Vec<u32>) -> (u64, u32) {
+    fn build_content(doc_ends: &[u32]) -> (u64, u32) {
         // The data on disk is build incrementally during add_doc,
         // so just return the content range here
         (

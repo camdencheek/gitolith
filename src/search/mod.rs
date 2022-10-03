@@ -36,8 +36,8 @@ pub fn search_regex<'a>(
     skip_index: bool,
     scope: &'a rayon::ScopeFifo,
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
-    let ast = regex_syntax::ast::parse::Parser::new().parse(&query)?;
-    let hir = regex_syntax::hir::translate::Translator::new().translate(&query, &ast)?;
+    let ast = regex_syntax::ast::parse::Parser::new().parse(query)?;
+    let hir = regex_syntax::hir::translate::Translator::new().translate(query, &ast)?;
 
     let extracted = if skip_index {
         ExtractedRegexLiterals::None
@@ -122,8 +122,7 @@ fn new_inexact_match_iterator<'a>(
             suf_range_iter
                 .map(|(suf_range, _)| suf_range)
                 .filter(|suf_range| suf_range.start != suf_range.end)
-                .map(move |suf_range| ContentIdxIterator::new(suf_range, &suffixes))
-                .flatten()
+                .flat_map(move |suf_range| ContentIdxIterator::new(suf_range, &suffixes))
         })
         .map(|content_idx_iter| ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter))
         .collect();
@@ -141,7 +140,7 @@ fn new_inexact_match_iterator<'a>(
                 content,
             }
         })
-        .filter(|doc_match| doc_match.matches.len() > 0);
+        .filter(|doc_match| !doc_match.matches.is_empty());
     Box::new(filtered)
 }
 
@@ -170,7 +169,7 @@ fn new_unindexed_match_iterator<'a>(
                 }
             })
             // TODO would a par_filter_map be more efficient here?
-            .filter(|doc_match| doc_match.matches.len() > 0),
+            .filter(|doc_match| !doc_match.matches.is_empty()),
     )
 }
 
@@ -202,7 +201,7 @@ impl ConcatIterator {
             }
         }
 
-        return (false, 0);
+        (false, 0)
     }
 }
 
@@ -391,12 +390,12 @@ where
     type Item = DocID;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(doc_id) = self.doc_iter.next() {
+        for doc_id in self.doc_iter.by_ref() {
             if self.seen_docs[usize::from(doc_id)] {
                 return Some(doc_id);
             }
 
-            while let Some(content_idx) = self.content_idx_iter.next() {
+            for content_idx in self.content_idx_iter.by_ref() {
                 let content_doc_id = self.doc_ends.find(content_idx);
                 if content_doc_id == doc_id {
                     return Some(doc_id);
@@ -424,7 +423,7 @@ impl ContentIdxIterator {
             block_iter: suffixes.iter_blocks(Some(block_range.start.0..=block_range.end.0)),
             block_range,
             current_block: None,
-            current_block_idx_iter: (0..0).into_iter(),
+            current_block_idx_iter: 0..0,
         }
     }
 
@@ -449,7 +448,7 @@ impl ContentIdxIterator {
         };
 
         self.current_block = Some(block);
-        self.current_block_idx_iter = (idx_start..idx_end).into_iter();
+        self.current_block_idx_iter = idx_start..idx_end;
     }
 }
 
@@ -509,7 +508,7 @@ where
     }
 
     fn start_once(&mut self) {
-        if self.senders.len() != 0 {
+        if !self.senders.is_empty() {
             return;
         }
 
@@ -558,10 +557,10 @@ where
         let idx = self.next_receiver.next().unwrap();
         let rx = self.receivers[idx].clone();
         match rx.recv() {
-            Err(RecvError) => return None,
+            Err(RecvError) => None,
             Ok(r) => {
                 self.spawn_task(idx);
-                return Some(r);
+                Some(r)
             }
         }
     }

@@ -42,13 +42,13 @@ impl TransparentKey for CacheKey {
         // within the key. Conflicts are okay, but should
         // be avoided if possible.
         match self {
-            DocEnds(shard_id) => (0 << 60) + u64::from(*shard_id),
+            DocEnds(shard_id) => (1 << 60) + u64::from(*shard_id),
             DocContent(shard_id, doc_id) => {
-                (1 << 60) + (u64::from(*shard_id) << 32) + u64::from(*doc_id)
+                (2 << 60) + (u64::from(*shard_id) << 32) + u64::from(*doc_id)
             }
 
             SuffixBlock(shard_id, block_id) => {
-                (2 << 60) + (u64::from(*shard_id) << 32) + u64::from(*block_id)
+                (3 << 60) + (u64::from(*shard_id) << 32) + u64::from(*block_id)
             }
         }
     }

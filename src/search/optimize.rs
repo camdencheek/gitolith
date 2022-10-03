@@ -21,8 +21,8 @@ fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
     let cardinality_limit = 4096; // TODO tune this parameter
 
     // Don't go past trigrams
-    for n in 1..=concat.as_ref().len() / 3 {
-        let split = split_mostly_even(concat.as_ref(), n)
+    for n in 1..=concat.as_slice().len() / 3 {
+        let split = split_mostly_even(concat.as_slice(), n)
             .iter()
             .map(|lits| ConcatLiteralSet::new(lits.to_vec()))
             .collect::<Vec<_>>();
@@ -37,7 +37,7 @@ fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
         }
     }
 
-    return optimize_inexact_literals(vec![concat]);
+    optimize_inexact_literals(vec![concat])
 }
 
 fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiterals {
@@ -56,7 +56,7 @@ fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiteral
     res.sort_by_key(|concat| concat.len());
     res.truncate(4);
 
-    if res.len() > 0 {
+    if !res.is_empty() {
         OptimizedLiterals::Inexact(res)
     } else {
         OptimizedLiterals::None
@@ -66,8 +66,8 @@ fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiteral
 fn optimize_inexact_literal(concat: ConcatLiteralSet) -> Option<Vec<ConcatLiteralSet>> {
     let cardinality_limit = 2048; // TODO tune this parameter
 
-    for n in 1..=concat.as_ref().len() {
-        let split = split_mostly_even(concat.as_ref(), n)
+    for n in 1..=concat.as_slice().len() {
+        let split = split_mostly_even(concat.as_slice(), n)
             .iter()
             .map(|lits| ConcatLiteralSet::new(lits.to_vec()))
             .collect::<Vec<_>>();
@@ -97,7 +97,7 @@ fn split_mostly_even<T>(items: &[T], parts: usize) -> Vec<&[T]> {
             base_len
         };
         v.push(&items[start..start + len]);
-        start = start + len;
+        start += len;
     }
     v
 }

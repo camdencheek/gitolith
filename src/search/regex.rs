@@ -73,7 +73,7 @@ impl ConcatLiteralSet {
         (Self(new), all_exact)
     }
 
-    pub fn as_ref(&self) -> &[LiteralSet] {
+    pub fn as_slice(&self) -> &[LiteralSet] {
         self.0.as_ref()
     }
 
@@ -87,7 +87,7 @@ impl ConcatLiteralSet {
         for set in self.0.iter() {
             place_value /= set.cardinality();
             let digit = state / place_value;
-            state = state % place_value;
+            state %= place_value;
             set.write_state_to(digit, dst);
         }
     }
@@ -141,13 +141,13 @@ impl LiteralSet {
                 let lowers = ClassBytes::new([ClassBytesRange::new(b'a', b'z')]);
 
                 let uppers_in_class = {
-                    let mut u = uppers.clone();
+                    let mut u = uppers;
                     u.intersect(&class);
                     u
                 };
 
                 let lowers_in_class = {
-                    let mut l = lowers.clone();
+                    let mut l = lowers;
                     l.intersect(&class);
                     l
                 };
@@ -161,9 +161,9 @@ impl LiteralSet {
                     }));
 
                 let uppers_and_lowers_are_equivalent = {
-                    let mut l = lowers_in_class.clone();
+                    let mut l = lowers_in_class;
                     l.symmetric_difference(&uppers_in_class_as_lowers);
-                    l.ranges().len() == 0
+                    l.ranges().is_empty()
                 };
 
                 class.difference(&uppers_in_class);
@@ -180,13 +180,13 @@ impl LiteralSet {
                 let lowers = ClassUnicode::new([ClassUnicodeRange::new('a', 'z')]);
 
                 let uppers_in_class = {
-                    let mut u = uppers.clone();
+                    let mut u = uppers;
                     u.intersect(&class);
                     u
                 };
 
                 let lowers_in_class = {
-                    let mut l = lowers.clone();
+                    let mut l = lowers;
                     l.intersect(&class);
                     l
                 };
@@ -200,9 +200,9 @@ impl LiteralSet {
                     }));
 
                 let uppers_and_lowers_are_equivalent = {
-                    let mut l = lowers_in_class.clone();
+                    let mut l = lowers_in_class;
                     l.symmetric_difference(&uppers_in_class_as_lowers);
-                    l.ranges().len() == 0
+                    l.ranges().is_empty()
                 };
 
                 class.difference(&uppers_in_class);
@@ -302,11 +302,9 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
         }
 
         fn close_current(&mut self) {
-            if self.current.len() > 0 {
-                self.complete.push(ConcatLiteralSet::new(std::mem::replace(
-                    &mut self.current,
-                    Vec::new(),
-                )));
+            if !self.current.is_empty() {
+                self.complete
+                    .push(ConcatLiteralSet::new(std::mem::take(&mut self.current)));
             }
         }
     }
@@ -359,14 +357,14 @@ pub fn extract_regex_literals(hir: Hir) -> ExtractedRegexLiterals {
     match (env.current.len(), env.exact) {
         (0, true) => ExtractedRegexLiterals::None,
         (_, true) => {
-            assert!(env.complete.len() == 0);
+            assert!(env.complete.is_empty());
             ExtractedRegexLiterals::Exact(ConcatLiteralSet::new(env.current))
         }
         (_, false) => {
-            if env.current.len() > 0 {
+            if !env.current.is_empty() {
                 env.complete.push(ConcatLiteralSet::new(env.current));
             }
-            if env.complete.len() > 0 {
+            if !env.complete.is_empty() {
                 ExtractedRegexLiterals::Inexact(env.complete)
             } else {
                 ExtractedRegexLiterals::None
@@ -393,12 +391,11 @@ fn split_unicode_ranges(ranges: &[hir::ClassUnicodeRange]) -> Vec<hir::ClassUnic
     let four_byte_min_char: char = char_unchecked(0x10000);
     let four_byte_max_char: char = char_unchecked(0x10FFFF);
 
-    let new_range = |a: char, b: char| hir::ClassUnicodeRange::new(a, b);
     let sized_ranges = [
-        new_range(one_byte_min_char, one_byte_max_char),
-        new_range(two_byte_min_char, two_byte_max_char),
-        new_range(three_byte_min_char, three_byte_max_char),
-        new_range(four_byte_min_char, four_byte_max_char),
+        hir::ClassUnicodeRange::new(one_byte_min_char, one_byte_max_char),
+        hir::ClassUnicodeRange::new(two_byte_min_char, two_byte_max_char),
+        hir::ClassUnicodeRange::new(three_byte_min_char, three_byte_max_char),
+        hir::ClassUnicodeRange::new(four_byte_min_char, four_byte_max_char),
     ];
 
     fn intersect(

@@ -27,7 +27,7 @@ impl ShardFile {
             .read_exact_at(&mut buf, self.header.docs.offsets.offset)?;
 
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
-        assert!(chunks.remainder().len() == 0);
+        assert!(chunks.remainder().is_empty());
 
         Ok(Arc::new(DocEnds::new(
             chunks
@@ -53,7 +53,7 @@ impl ShardFile {
         self.file.read_exact_at(&mut buf, block_start)?;
 
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
-        assert!(chunks.remainder().len() == 0);
+        assert!(chunks.remainder().is_empty());
 
         let mut block = Arc::new(SuffixBlock::default());
         let block_ref = Arc::get_mut(&mut block).unwrap();

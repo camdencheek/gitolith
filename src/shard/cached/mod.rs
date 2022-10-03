@@ -28,14 +28,14 @@ impl CachedShard {
     }
 
     pub fn docs(&self) -> CachedDocs {
-        CachedDocs::new(self.id, self.shard.docs().clone(), self.cache.clone())
+        CachedDocs::new(self.id, self.shard.docs(), self.cache.clone())
     }
 
     pub fn suffixes(&self) -> CachedSuffixes {
         CachedSuffixes::new(
             self.id,
-            self.shard.suffixes().clone(),
-            self.shard.docs().clone(),
+            self.shard.suffixes(),
+            self.shard.docs(),
             self.cache.clone(),
         )
     }
@@ -69,8 +69,7 @@ impl CachedDocs {
             let v = CacheValue::DocContent(
                 self.docs
                     .read_content(doc_id, doc_ends)
-                    .expect("failed to read doc content")
-                    .into(),
+                    .expect("failed to read doc content"),
             );
             self.cache.insert(key, v.clone(), 0);
             v
@@ -182,7 +181,7 @@ impl CachedSuffixes {
                     _ => {}
                 }
             }
-            return include_equal;
+            include_equal
         };
 
         self.partition_by_content_idx(pred)
@@ -244,11 +243,11 @@ impl CachedSuffixes {
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::SuffixBlock(Arc::from(
+            let v = CacheValue::SuffixBlock(
                 self.suffixes
                     .read_block(block_id)
                     .expect("failed to read suffix block"),
-            ));
+            );
             self.cache.insert(key, v.clone(), 0);
             v
         };
