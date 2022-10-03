@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     docs::{DocEnds, DocID},
-    file::ShardStore,
+    file::{ShardBackend, ShardFile, ShardHeader, ShardStore},
     suffix::SuffixBlockID,
     ShardID,
 };
@@ -17,11 +17,11 @@ use super::{
 pub struct CachedShardFile {
     shard_id: ShardID,
     cache: Cache,
-    file: ShardStore,
+    file: ShardFile,
 }
 
 impl CachedShardFile {
-    pub fn new(shard_id: ShardID, cache: Cache, file: ShardStore) -> Self {
+    pub fn new(shard_id: ShardID, cache: Cache, file: ShardFile) -> Self {
         Self {
             shard_id,
             cache,
@@ -30,8 +30,12 @@ impl CachedShardFile {
     }
 }
 
-impl CachedShardFile {
-    pub fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
+impl ShardBackend for CachedShardFile {
+    fn header(&self) -> &ShardHeader {
+        &self.file.header
+    }
+
+    fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
         let key = CacheKey::DocEnds(self.shard_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
@@ -47,7 +51,7 @@ impl CachedShardFile {
         }
     }
 
-    pub fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
+    fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
         let key = CacheKey::DocContent(self.shard_id, doc_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
@@ -63,7 +67,7 @@ impl CachedShardFile {
         }
     }
 
-    pub fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
+    fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
         let key = CacheKey::SuffixBlock(self.shard_id, block_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()

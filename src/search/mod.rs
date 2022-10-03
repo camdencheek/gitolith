@@ -599,13 +599,15 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
+    use std::{path::Path, sync::Arc};
 
     use rayon::scope_fifo;
 
     use crate::{
         cache,
-        shard::{builder::ShardBuilder, Shard, ShardID},
+        shard::{
+            builder::ShardBuilder, cached_file::CachedShardFile, file::ShardBackend, Shard, ShardID,
+        },
     };
 
     use super::search_regex;
@@ -622,9 +624,10 @@ mod test {
         ] {
             b.add_doc(doc.as_bytes()).unwrap();
         }
-        b.build().unwrap()
-        // let c = cache::new_cache(64 * 1024 * 1024); // 4 GiB
-        // Shard::new(ShardID(0), s, c)
+        let shard_file = b.build().unwrap();
+        let c = cache::new_cache(64 * 1024 * 1024);
+        let cached_store = Arc::new(CachedShardFile::new(ShardID(0), c, shard_file));
+        Shard::from_store(cached_store)
     }
 
     fn assert_count(s: Shard, re: &str, want_count: usize) {

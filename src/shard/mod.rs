@@ -30,6 +30,10 @@ pub struct Shard {
 }
 
 impl Shard {
+    pub fn from_store(store: ShardStore) -> Self {
+        Self { file: store }
+    }
+
     pub fn open(path: &Path) -> Result<Self, Error> {
         let f = File::open(path)?;
         Self::from_file(f)

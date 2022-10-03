@@ -1,5 +1,5 @@
 use super::docs::DocID;
-use super::file::{CompoundSection, ShardHeader, SimpleSection};
+use super::file::{CompoundSection, ShardFile, ShardHeader, SimpleSection};
 use super::suffix::SuffixBlock;
 use super::Shard;
 use crate::strcmp::AsciiLowerIter;
@@ -53,7 +53,7 @@ impl ShardBuilder {
         Ok(DocID(self.doc_ends.len() as u32 - 1))
     }
 
-    pub fn build(mut self) -> Result<Shard, Error> {
+    pub fn build(mut self) -> Result<ShardFile, Error> {
         let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
         let (doc_starts_ptr, doc_starts_len) = Self::build_docs(&mut self.file, &self.doc_ends)?;
         let (suffix_ptr, suffix_len) =
@@ -67,7 +67,7 @@ impl ShardBuilder {
             suffix_ptr,
             suffix_len.into(),
         )?;
-        Shard::from_file(self.file)
+        ShardFile::from_file(self.file)
     }
 
     fn build_content(doc_ends: &[u32]) -> (u64, u32) {
