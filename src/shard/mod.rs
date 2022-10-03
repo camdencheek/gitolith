@@ -1,5 +1,4 @@
 pub mod builder;
-pub mod cached;
 pub mod cached_file;
 pub mod docs;
 pub mod file;
@@ -47,8 +46,6 @@ impl Shard {
     }
 
     pub fn suffixes(&self) -> SuffixArrayStore {
-        let sa_len = (self.file.header().sa.len / std::mem::size_of::<u32>() as u64) as u32;
-        assert!(sa_len == self.file.header().docs.data.len as u32);
-        SuffixArrayStore::new(Arc::clone(&self.file), sa_len)
+        SuffixArrayStore::new(Arc::clone(&self.file))
     }
 }

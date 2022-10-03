@@ -8,11 +8,11 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use gitserver3::{
     cache::new_cache,
     search::search_regex,
-    shard::{builder::ShardBuilder, cached::CachedShard, Shard, ShardID},
+    shard::{builder::ShardBuilder, Shard, ShardID},
 };
 use walkdir::WalkDir;
 
-fn search_shard(shard: CachedShard, query: &str) -> usize {
+fn search_shard(shard: Shard, query: &str) -> usize {
     rayon::in_place_scope_fifo(|s| -> usize {
         search_regex(shard, query, false, s)
             .unwrap()
@@ -55,8 +55,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     )
     .unwrap();
     let shard = Shard::open(&Path::new("/tmp/shardlinux")).unwrap();
-    let cache = new_cache(256 * 1024 * 1024);
-    let cached_shard = CachedShard::new(ShardID(0), shard, cache);
+    // let cache = new_cache(256 * 1024 * 1024);
 
     for query in &[
         "torvalds",
@@ -65,9 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         "module_put_.*_pthread",
         r"\w+\(char \*\w+\)",
     ] {
-        c.bench_function(&query, |b| {
-            b.iter(|| search_shard(cached_shard.clone(), &query))
-        });
+        c.bench_function(&query, |b| b.iter(|| search_shard(shard.clone(), &query)));
     }
 
     c.bench_function("combined case insensitive", |b| {
@@ -79,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "(?i)crc_itu_t",
                 "(?i)mmrdpcstx1",
             ] {
-                search_shard(cached_shard.clone(), &query);
+                search_shard(shard.clone(), &query);
             }
         })
     });

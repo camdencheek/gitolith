@@ -11,7 +11,6 @@ use walkdir::WalkDir;
 use gitserver3::cache;
 use gitserver3::search::search_regex;
 use gitserver3::shard::builder::ShardBuilder;
-use gitserver3::shard::cached::CachedShard;
 use gitserver3::shard::{Shard, ShardID};
 
 #[derive(Parser, Debug)]
@@ -77,10 +76,10 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         Some(s) => bytefmt::parse(&s).expect("failed to parse cache size"),
         None => 256 * 1024 * 1024,
     };
-    let s = Shard::open(&args.shard)?;
-    let content_size = s.file.header().docs.data.len;
-    let c = cache::new_cache(cache_size); // 4 GiB
-    let cs = CachedShard::new(ShardID(0), s, c);
+    let cs = Shard::open(&args.shard)?;
+    // let content_size = s.file.header().docs.data.len;
+    // let c = cache::new_cache(cache_size); // 4 GiB
+    // let cs = CachedShard::new(ShardID(0), s, c);
 
     for i in 0..args.repeat {
         let start = Instant::now();
@@ -117,9 +116,9 @@ fn search(args: SearchArgs) -> Result<(), Error> {
             buf.flush()?;
 
             println!(
-                "Iter: {}, Searched: {}, Match Count: {}, Elapsed: {:3.2?}",
+                "Iter: {}, Searched: , Match Count: {}, Elapsed: {:3.2?}",
                 i,
-                bytefmt::format(content_size),
+                // bytefmt::format(content_size),
                 count,
                 start.elapsed()
             );

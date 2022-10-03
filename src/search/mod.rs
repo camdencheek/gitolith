@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use ::regex::bytes::Regex;
 
-use crate::shard::cached::{
-    CachedDocs, CachedShard, CachedSuffixes, SuffixBlockIterator, SuffixRangeIterator,
-};
-use crate::shard::docs::{ContentIdx, DocIDIterator};
+use crate::shard::docs::{ContentIdx, DocIDIterator, DocStore};
 use crate::shard::docs::{DocEnds, DocID};
-use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
+use crate::shard::suffix::{
+    SuffixArrayStore, SuffixBlock, SuffixBlockID, SuffixBlockIterator, SuffixIdx,
+    SuffixRangeIterator,
+};
+use crate::shard::Shard;
 
 use self::optimize::OptimizedLiterals;
 use self::regex::{extract_regex_literals, ConcatLiteralSet, ExtractedRegexLiterals};
@@ -31,7 +32,7 @@ pub struct DocMatch {
 }
 
 pub fn search_regex<'a>(
-    s: CachedShard,
+    s: Shard,
     query: &'_ str,
     skip_index: bool,
     scope: &'a rayon::ScopeFifo,
@@ -61,7 +62,7 @@ pub fn search_regex<'a>(
 
 fn new_exact_match_iterator<'a>(
     query: &str,
-    shard: CachedShard,
+    shard: Shard,
     literals: Vec<ConcatLiteralSet>,
     scope: &'a rayon::ScopeFifo,
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
@@ -106,11 +107,11 @@ fn new_exact_match_iterator<'a>(
 
 fn new_inexact_match_iterator<'a>(
     re: Regex,
-    shard: CachedShard,
+    shard: Shard,
     literals: Vec<ConcatLiteralSet>,
     scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
-    let doc_ends = shard.docs().get_doc_ends();
+    let doc_ends = shard.docs().read_doc_ends().unwrap();
     let suffixes = shard.suffixes();
     let docs = Arc::new(shard.docs());
 
@@ -128,7 +129,7 @@ fn new_inexact_match_iterator<'a>(
         .collect();
     let filtered = AndDocIterator::new(content_idx_iters)
         .par_map(scope, 32, move |doc_id| -> DocMatch {
-            let content = docs.get_content(doc_id, &doc_ends);
+            let content = docs.read_content(doc_id, &doc_ends).unwrap();
             let matched_ranges: Vec<Range<u32>> = re
                 .find_iter(&content)
                 .map(|m| m.start() as u32..m.end() as u32)
@@ -146,17 +147,17 @@ fn new_inexact_match_iterator<'a>(
 
 fn new_unindexed_match_iterator<'a>(
     re: Regex,
-    shard: CachedShard,
+    shard: Shard,
     scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
-    let doc_ends = shard.docs().get_doc_ends();
+    let doc_ends = shard.docs().read_doc_ends().unwrap();
     let doc_ids = shard.docs().doc_ids();
     let re = Arc::new(re);
     let docs = Arc::new(shard.docs());
     Box::new(
         doc_ids
             .par_map(scope, 128, move |doc_id| -> DocMatch {
-                let content = docs.get_content(doc_id, &doc_ends);
+                let content = docs.read_content(doc_id, &doc_ends).unwrap();
                 let matched_ranges: Vec<Range<u32>> = re
                     .find_iter(&content)
                     .map(|m| m.start() as u32..m.end() as u32)
@@ -268,13 +269,13 @@ impl Iterator for SortingIterator {
 struct ExactDocIter {
     candidates: Peekable<ConcatIterator>,
     doc_ends: Arc<DocEnds>,
-    docs: CachedDocs,
+    docs: DocStore,
 }
 
 impl ExactDocIter {
-    fn new(docs: CachedDocs, matched_indexes: Vec<SortingIterator>) -> Self {
+    fn new(docs: DocStore, matched_indexes: Vec<SortingIterator>) -> Self {
         Self {
-            doc_ends: docs.get_doc_ends(),
+            doc_ends: docs.read_doc_ends().unwrap(),
             docs,
             candidates: ConcatIterator::new(matched_indexes).peekable(),
         }
@@ -292,7 +293,7 @@ impl Iterator for ExactDocIter {
         let mut res = DocMatch {
             id: doc_id,
             matches: Vec::with_capacity(1),
-            content: self.docs.get_content(doc_id, &self.doc_ends),
+            content: self.docs.read_content(doc_id, &self.doc_ends).unwrap(),
         };
 
         let mut add_match = |idx: ContentIdx, len: u32| {
@@ -417,8 +418,8 @@ struct ContentIdxIterator {
 }
 
 impl ContentIdxIterator {
-    fn new(suffix_range: Range<SuffixIdx>, suffixes: &CachedSuffixes) -> Self {
-        let block_range = CachedSuffixes::block_range(suffix_range);
+    fn new(suffix_range: Range<SuffixIdx>, suffixes: &SuffixArrayStore) -> Self {
+        let block_range = SuffixArrayStore::block_range(suffix_range);
         Self {
             block_iter: suffixes.iter_blocks(Some(block_range.start.0..=block_range.end.0)),
             block_range,
@@ -604,12 +605,12 @@ mod test {
 
     use crate::{
         cache,
-        shard::{builder::ShardBuilder, cached::CachedShard, ShardID},
+        shard::{builder::ShardBuilder, Shard, ShardID},
     };
 
     use super::search_regex;
 
-    fn build_shard() -> CachedShard {
+    fn build_shard() -> Shard {
         let mut b = ShardBuilder::new(&Path::new("/tmp/testshard1")).unwrap();
         for doc in &mut [
             "document1".to_string(),
@@ -621,12 +622,12 @@ mod test {
         ] {
             b.add_doc(doc.as_bytes()).unwrap();
         }
-        let s = b.build().unwrap();
-        let c = cache::new_cache(64 * 1024 * 1024); // 4 GiB
-        CachedShard::new(ShardID(0), s, c)
+        b.build().unwrap()
+        // let c = cache::new_cache(64 * 1024 * 1024); // 4 GiB
+        // Shard::new(ShardID(0), s, c)
     }
 
-    fn assert_count(s: CachedShard, re: &str, want_count: usize) {
+    fn assert_count(s: Shard, re: &str, want_count: usize) {
         scope_fifo(|scope| {
             let got_count: usize = search_regex(s, re, false, scope)
                 .unwrap()
