@@ -10,7 +10,7 @@ use std::path::Path;
 pub mod docs;
 // use super::cache::Cache;
 use super::shard::suffix::SuffixArrayStore;
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
@@ -92,22 +92,20 @@ impl ShardHeader {
     }
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
+        let mut r = buf.reader();
+
+        let version = u32::read_from(&mut r)?;
+        let flags = u32::read_from(&mut r)?;
+        let content = SimpleSection::read_from(&mut r)?;
+        let doc_ends = SimpleSection::read_from(&mut r)?;
+        let sa = SimpleSection::read_from(&mut r)?;
+
         Ok(Self {
-            version: u32::from_le_bytes(buf[0..4].try_into()?),
-            flags: u32::from_le_bytes(buf[4..8].try_into()?),
-            // TODO: use read_from
-            content: SimpleSection {
-                offset: u64::from_le_bytes(buf[8..16].try_into()?),
-                len: u64::from_le_bytes(buf[16..24].try_into()?),
-            },
-            doc_ends: SimpleSection {
-                offset: u64::from_le_bytes(buf[24..32].try_into()?),
-                len: u64::from_le_bytes(buf[32..40].try_into()?),
-            },
-            sa: SimpleSection {
-                offset: u64::from_le_bytes(buf[40..48].try_into()?),
-                len: u64::from_le_bytes(buf[48..56].try_into()?),
-            },
+            version,
+            flags,
+            content,
+            doc_ends,
+            sa,
         })
     }
 }
