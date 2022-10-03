@@ -54,15 +54,14 @@ impl ShardBuilder {
 
     pub fn build(mut self) -> Result<ShardFile, Error> {
         let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
-        let (doc_starts_ptr, doc_starts_len) = Self::build_docs(&mut self.file, &self.doc_ends)?;
+        let doc_ends_section = Self::build_docs(&mut self.file, &self.doc_ends)?;
         let (suffix_ptr, suffix_len) =
             Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
         Self::build_header(
             &self.file,
             content_ptr,
             content_len.into(),
-            doc_starts_ptr,
-            doc_starts_len.into(),
+            doc_ends_section,
             suffix_ptr,
             suffix_len.into(),
         )?;
@@ -78,7 +77,7 @@ impl ShardBuilder {
         )
     }
 
-    fn build_docs(file: &mut File, doc_ends: &Vec<u32>) -> Result<(u64, u32), io::Error> {
+    fn build_docs(file: &mut File, doc_ends: &Vec<u32>) -> Result<SimpleSection, io::Error> {
         // Write all the doc ends to the buffer
         let start = file.seek(io::SeekFrom::Current(0))?;
         let mut buf = BufWriter::new(file);
@@ -86,7 +85,10 @@ impl ShardBuilder {
             buf.write_all(&doc_end.to_le_bytes())?;
         }
         buf.flush()?;
-        Ok((start, doc_ends.len() as u32))
+        Ok(SimpleSection {
+            offset: start,
+            len: doc_ends.len() as u64 * std::mem::size_of::<u32>() as u64,
+        })
     }
 
     fn build_suffix_array(
@@ -129,8 +131,7 @@ impl ShardBuilder {
         file: &File,
         content_ptr: u64,
         content_len: u64,
-        doc_ends_ptr: u64,
-        doc_ends_len: u64,
+        doc_ends_section: SimpleSection,
         sa_ptr: u64,
         sa_len: u64,
     ) -> Result<ShardHeader, io::Error> {
@@ -142,10 +143,7 @@ impl ShardBuilder {
                     offset: content_ptr,
                     len: content_len,
                 },
-                offsets: SimpleSection {
-                    offset: doc_ends_ptr,
-                    len: doc_ends_len * std::mem::size_of::<u32>() as u64,
-                },
+                offsets: doc_ends_section,
             },
             sa: SimpleSection {
                 offset: sa_ptr,
