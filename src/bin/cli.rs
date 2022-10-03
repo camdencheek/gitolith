@@ -4,6 +4,7 @@ use anyhow::Error;
 use clap::{Parser, Subcommand};
 use gitserver3::shard::cached_file::CachedShardFile;
 use gitserver3::shard::file::ShardFile;
+use regex::bytes::Regex;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         ShardFile::from_file(File::open(args.shard)?)?,
     ));
     let cs = Shard::from_store(csf);
+    let re = Regex::new(&args.query)?;
 
     for i in 0..args.repeat {
         let start = Instant::now();
@@ -91,7 +93,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         let mut count = 0;
         let mut limit = args.limit.unwrap_or(usize::MAX);
 
-        for mut doc_match in search_regex(cs.clone(), &args.query, args.skip_index)? {
+        for mut doc_match in search_regex(cs.clone(), re.clone(), args.skip_index) {
             doc_match.matches.truncate(limit);
             limit -= doc_match.matches.len();
             if !args.count_only {

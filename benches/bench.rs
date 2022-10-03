@@ -4,17 +4,17 @@ use std::{
 };
 
 use anyhow::Error;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use gitserver3::{
-    cache::new_cache,
     search::search_regex,
-    shard::{builder::ShardBuilder, Shard, ShardID},
+    shard::{builder::ShardBuilder, Shard},
 };
+use regex::bytes::Regex;
 use walkdir::WalkDir;
 
 fn search_shard(shard: Shard, query: &str) -> usize {
-    search_regex(shard, query, false)
-        .unwrap()
+    let re = Regex::new(query).unwrap();
+    search_regex(shard, re, false)
         .map(|dm| dm.matches.len())
         .sum()
 }

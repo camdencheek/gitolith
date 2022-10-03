@@ -30,14 +30,13 @@ pub struct DocMatch {
     pub content: Arc<[u8]>,
 }
 
-pub fn search_regex<'a>(
-    s: Shard,
-    query: &'_ str,
-    skip_index: bool,
-) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
-    let ast = regex_syntax::ast::parse::Parser::new().parse(query)?;
-    let hir = regex_syntax::hir::translate::Translator::new().translate(query, &ast)?;
-    let re = Regex::new(query)?;
+pub fn search_regex(s: Shard, re: Regex, skip_index: bool) -> Box<dyn Iterator<Item = DocMatch>> {
+    let ast = regex_syntax::ast::parse::Parser::new()
+        .parse(re.as_str())
+        .unwrap();
+    let hir = regex_syntax::hir::translate::Translator::new()
+        .translate(re.as_str(), &ast)
+        .unwrap();
 
     let extracted = if skip_index {
         ExtractedRegexLiterals::None
@@ -48,9 +47,9 @@ pub fn search_regex<'a>(
     let extracted = extracted.to_lower_ascii();
     let optimized = optimize_extracted(extracted);
     match optimized {
-        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(re, s)),
-        OptimizedLiterals::OrderedExact(set) => Ok(new_exact_match_iterator(re, s, set)),
-        OptimizedLiterals::Inexact(all) => Ok(new_inexact_match_iterator(re, s, all)),
+        OptimizedLiterals::None => new_unindexed_match_iterator(re, s),
+        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(re, s, set),
+        OptimizedLiterals::Inexact(all) => new_inexact_match_iterator(re, s, all),
     }
 }
 
@@ -464,6 +463,8 @@ impl Iterator for ContentIdxIterator {
 mod test {
     use std::{path::Path, sync::Arc};
 
+    use regex::bytes::Regex;
+
     use crate::{
         cache,
         shard::{
@@ -492,8 +493,8 @@ mod test {
     }
 
     fn assert_count(s: Shard, re: &str, want_count: usize) {
-        let got_count: usize = search_regex(s, re, false)
-            .unwrap()
+        let compiled = Regex::new(re).unwrap();
+        let got_count: usize = search_regex(s, compiled, false)
             .map(|doc_match| doc_match.matches.len())
             .sum();
         assert_eq!(
