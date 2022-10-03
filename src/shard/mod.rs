@@ -30,7 +30,7 @@ impl From<ShardID> for u64 {
 
 #[derive(Clone)]
 pub struct Shard {
-    pub header: ShardHeader,
+    pub file: Arc<ShardFile>,
     pub docs: DocStore,
     pub suffixes: SuffixArrayStore,
 }
@@ -56,7 +56,7 @@ impl Shard {
         let suffixes = SuffixArrayStore::new(Arc::clone(&file), sa_len);
 
         Ok(Self {
-            header,
+            file: Arc::clone(&file),
             docs,
             suffixes,
         })
