@@ -47,14 +47,14 @@ impl Shard {
         let file = Arc::new(file);
         let content = ContentStore::new(
             Arc::clone(&file),
-            header.content.offset,
-            header.content.len as u32,
+            header.docs.data.offset,
+            header.docs.data.len as u32,
         );
         let docs = DocStore::new(
             Arc::clone(&file),
             content.clone(),
-            header.doc_ends.offset,
-            header.doc_ends.len as u32,
+            header.docs.offsets.offset,
+            header.docs.offsets.len as u32,
         );
         let suffixes =
             SuffixArrayStore::new(Arc::clone(&file), header.sa.offset, header.sa.len as u32);
@@ -71,8 +71,7 @@ impl Shard {
 pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
-    pub content: SimpleSection,
-    pub doc_ends: SimpleSection,
+    pub docs: CompoundSection,
     pub sa: SimpleSection,
 }
 
@@ -95,15 +94,13 @@ impl ReadWriteStream for ShardHeader {
     {
         let version = u32::read_from(r)?;
         let flags = u32::read_from(r)?;
-        let content = SimpleSection::read_from(r)?;
-        let doc_ends = SimpleSection::read_from(r)?;
+        let docs = CompoundSection::read_from(r)?;
         let sa = SimpleSection::read_from(r)?;
 
         Ok(Self {
             version,
             flags,
-            content,
-            doc_ends,
+            docs,
             sa,
         })
     }
@@ -112,8 +109,7 @@ impl ReadWriteStream for ShardHeader {
         let mut n = 0;
         n += self.version.write_to(w)?;
         n += self.flags.write_to(w)?;
-        n += self.content.write_to(w)?;
-        n += self.doc_ends.write_to(w)?;
+        n += self.docs.write_to(w)?;
         n += self.sa.write_to(w)?;
         Ok(n)
     }

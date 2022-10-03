@@ -1,6 +1,6 @@
 use super::docs::DocID;
 use super::suffix::SuffixBlock;
-use super::{Shard, ShardHeader, SimpleSection};
+use super::{CompoundSection, Shard, ShardHeader, SimpleSection};
 use crate::strcmp::AsciiLowerIter;
 use anyhow::Error;
 use memmap2::MmapMut;
@@ -137,13 +137,15 @@ impl ShardBuilder {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
-            content: SimpleSection {
-                offset: content_ptr,
-                len: content_len,
-            },
-            doc_ends: SimpleSection {
-                offset: doc_ends_ptr,
-                len: doc_ends_len,
+            docs: CompoundSection {
+                data: SimpleSection {
+                    offset: content_ptr,
+                    len: content_len,
+                },
+                offsets: SimpleSection {
+                    offset: doc_ends_ptr,
+                    len: doc_ends_len,
+                },
             },
             sa: SimpleSection {
                 offset: sa_ptr,
