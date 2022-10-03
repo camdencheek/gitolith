@@ -31,7 +31,6 @@ impl From<ShardID> for u64 {
 #[derive(Clone)]
 pub struct Shard {
     pub file: Arc<ShardFile>,
-    pub suffixes: SuffixArrayStore,
 }
 
 impl Shard {
@@ -44,22 +43,17 @@ impl Shard {
         let mut buf = [0u8; ShardHeader::HEADER_SIZE];
         file.read_at(&mut buf[..], 0)?;
         let header = ShardHeader::read_from(&mut buf[..].reader())?;
-
-        let file = Arc::new(ShardFile {
-            file,
-            header: header.clone(),
-        });
-        let sa_len = (header.sa.len / std::mem::size_of::<u32>() as u64) as u32;
-        assert!(sa_len == header.docs.data.len as u32);
-        let suffixes = SuffixArrayStore::new(Arc::clone(&file), sa_len);
-
-        Ok(Self {
-            file: Arc::clone(&file),
-            suffixes,
-        })
+        let shard_file = Arc::new(ShardFile { file, header });
+        Ok(Self { file: shard_file })
     }
 
     pub fn docs(&self) -> DocStore {
         DocStore::new(Arc::clone(&self.file))
+    }
+
+    pub fn suffixes(&self) -> SuffixArrayStore {
+        let sa_len = (self.file.header.sa.len / std::mem::size_of::<u32>() as u64) as u32;
+        assert!(sa_len == self.file.header.docs.data.len as u32);
+        SuffixArrayStore::new(Arc::clone(&self.file), sa_len)
     }
 }

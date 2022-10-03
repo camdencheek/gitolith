@@ -34,7 +34,7 @@ impl CachedShard {
     pub fn suffixes(&self) -> CachedSuffixes {
         CachedSuffixes::new(
             self.id,
-            self.shard.suffixes.clone(),
+            self.shard.suffixes().clone(),
             self.shard.docs().clone(),
             self.cache.clone(),
         )
