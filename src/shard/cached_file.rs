@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     docs::{DocEnds, DocID},
-    file::ShardFile,
+    file::{ShardBackend, ShardFile, ShardStore},
     suffix::SuffixBlockID,
     ShardID,
 };
@@ -17,7 +17,17 @@ use super::{
 pub struct CachedShardFile {
     shard_id: ShardID,
     cache: Cache,
-    pub file: ShardFile,
+    file: ShardStore,
+}
+
+impl CachedShardFile {
+    pub fn new(shard_id: ShardID, cache: Cache, file: ShardStore) -> Self {
+        Self {
+            shard_id,
+            cache,
+            file,
+        }
+    }
 }
 
 impl CachedShardFile {

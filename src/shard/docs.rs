@@ -1,4 +1,4 @@
-use super::file::ShardFile;
+use super::file::{ShardBackend, ShardFile, ShardStore};
 use anyhow::Error;
 use derive_more::{Add, AddAssign, From, Into, Mul, Sub};
 use std::ops::Range;
@@ -55,12 +55,12 @@ impl From<ContentIdx> for u64 {
 
 #[derive(Clone)]
 pub struct DocStore {
-    file: Arc<ShardFile>,
+    store: ShardStore,
 }
 
 impl DocStore {
-    pub fn new(file: Arc<ShardFile>) -> Self {
-        Self { file }
+    pub fn new(store: ShardStore) -> Self {
+        Self { store }
     }
 
     pub fn doc_ids(&self) -> impl Iterator<Item = DocID> {
@@ -68,17 +68,17 @@ impl DocStore {
     }
 
     pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
-        self.file.read_doc(doc_id, doc_ends)
+        self.store.read_doc(doc_id, doc_ends)
     }
 
     // Returns the list of offsets (relative to the beginning of the content block)
     // that contain the zero-byte separators at the end of each document.
     pub fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
-        self.file.read_doc_ends()
+        self.store.read_doc_ends()
     }
 
     pub fn num_docs(&self) -> u32 {
-        (self.file.header.docs.offsets.len / std::mem::size_of::<u32>() as u64) as u32
+        (self.store.header().docs.offsets.len / std::mem::size_of::<u32>() as u64) as u32
     }
 
     pub fn max_doc_id(&self) -> DocID {

@@ -15,13 +15,30 @@ use super::{
     suffix::{SuffixBlock, SuffixBlockID},
 };
 
+pub type ShardStore = Arc<dyn ShardBackend + Send + Sync>;
+
+pub trait ShardBackend {
+    fn header(&self) -> &ShardHeader;
+    fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error>;
+    fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error>;
+    fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error>;
+}
+
 pub struct ShardFile {
     pub file: File,
     pub header: ShardHeader,
 }
 
-impl ShardFile {
-    pub fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
+impl ShardBackend for ShardFile {
+    // TODO these methods are currently written to avoid any unsafe. There are
+    // a few extra copies in here because of that, but we should consider things
+    // like Arc::new_zeroed_slice.
+
+    fn header(&self) -> &ShardHeader {
+        &self.header
+    }
+
+    fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
         let mut buf = vec![0u8; self.header.docs.offsets.len as usize];
         self.file
             .read_exact_at(&mut buf, self.header.docs.offsets.offset)?;
@@ -37,7 +54,7 @@ impl ShardFile {
         )))
     }
 
-    pub fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
+    fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
         let range = doc_ends.content_range(doc_id);
         let doc_start = self.header.docs.data.offset + u64::from(range.start);
         let doc_len = usize::from(range.end) - usize::from(range.start);
@@ -46,7 +63,7 @@ impl ShardFile {
         Ok(buf.into())
     }
 
-    pub fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
+    fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
         let block_start =
             self.header.sa.offset + u64::from(block_id) * SuffixBlock::SIZE_BYTES as u64;
         let mut buf = [0u8; SuffixBlock::SIZE_BYTES];

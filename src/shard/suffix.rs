@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::docs::ContentIdx;
-use super::file::ShardFile;
+use super::file::{ShardBackend, ShardFile, ShardStore};
 
 #[derive(
     Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
@@ -39,7 +39,7 @@ impl Default for SuffixBlock {
 
 #[derive(Clone)]
 pub struct SuffixArrayStore {
-    file: Arc<ShardFile>,
+    store: ShardStore,
     // Pointer to the suffix array relative to the start of the file
     // Length in u32s, not bytes
     // TODO this should not be public
@@ -47,8 +47,8 @@ pub struct SuffixArrayStore {
 }
 
 impl SuffixArrayStore {
-    pub fn new(file: Arc<ShardFile>, sa_len: u32) -> Self {
-        Self { file, sa_len }
+    pub fn new(store: ShardStore, sa_len: u32) -> Self {
+        Self { store, sa_len }
     }
 
     pub fn max_block_id(&self) -> SuffixBlockID {
@@ -80,6 +80,6 @@ impl SuffixArrayStore {
     }
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
-        self.file.read_suffix_block(block_id)
+        self.store.read_suffix_block(block_id)
     }
 }

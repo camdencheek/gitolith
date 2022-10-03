@@ -8,7 +8,7 @@ pub mod suffix;
 use bytes::Buf;
 use file::ShardHeader;
 
-use self::file::{ReadWriteStream, ShardFile};
+use self::file::{ReadWriteStream, ShardBackend, ShardFile, ShardStore};
 use anyhow::Error;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -31,7 +31,7 @@ impl From<ShardID> for u64 {
 
 #[derive(Clone)]
 pub struct Shard {
-    pub file: Arc<ShardFile>,
+    pub file: ShardStore,
 }
 
 impl Shard {
@@ -53,8 +53,8 @@ impl Shard {
     }
 
     pub fn suffixes(&self) -> SuffixArrayStore {
-        let sa_len = (self.file.header.sa.len / std::mem::size_of::<u32>() as u64) as u32;
-        assert!(sa_len == self.file.header.docs.data.len as u32);
+        let sa_len = (self.file.header().sa.len / std::mem::size_of::<u32>() as u64) as u32;
+        assert!(sa_len == self.file.header().docs.data.len as u32);
         SuffixArrayStore::new(Arc::clone(&self.file), sa_len)
     }
 }

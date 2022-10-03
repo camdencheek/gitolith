@@ -78,7 +78,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         None => 256 * 1024 * 1024,
     };
     let s = Shard::open(&args.shard)?;
-    let content_size = s.file.header.docs.data.len;
+    let content_size = s.file.header().docs.data.len;
     let c = cache::new_cache(cache_size); // 4 GiB
     let cs = CachedShard::new(ShardID(0), s, c);
 
