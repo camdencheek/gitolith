@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     docs::{DocEnds, DocID},
-    file::{ShardFile, ShardHeader},
+    file::ShardFile,
     suffix::SuffixBlockID,
     ShardID,
 };

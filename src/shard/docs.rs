@@ -36,7 +36,9 @@ impl DocID {
     }
 }
 
-#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Ord, Hash)]
+#[derive(
+    Default, Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Ord, Hash,
+)]
 pub struct ContentIdx(pub u32);
 
 impl From<ContentIdx> for usize {

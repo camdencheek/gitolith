@@ -55,7 +55,7 @@ impl ShardFile {
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
         assert!(chunks.remainder().len() == 0);
 
-        let mut block = Arc::new(SuffixBlock::new());
+        let mut block = Arc::new(SuffixBlock::default());
         let block_ref = Arc::get_mut(&mut block).unwrap();
         for (i, chunk) in chunks.enumerate() {
             block_ref.0[i] = ContentIdx(u32::from_le_bytes(chunk.try_into()?));
