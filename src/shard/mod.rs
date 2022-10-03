@@ -47,8 +47,8 @@ impl Shard {
         let file = Arc::new(file);
         let content = ContentStore::new(
             Arc::clone(&file),
-            header.content_ptr,
-            header.content_len as u32,
+            header.content.offset,
+            header.content.len as u32,
         );
         let docs = DocStore::new(
             Arc::clone(&file),
@@ -71,8 +71,7 @@ impl Shard {
 pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
-    pub content_ptr: u64,
-    pub content_len: u64,
+    pub content: SimpleSection,
     pub doc_ends_ptr: u64,
     pub doc_ends_len: u64,
     pub sa_ptr: u64,
@@ -88,8 +87,7 @@ impl ShardHeader {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize).writer();
         self.version.write_to(&mut buf).unwrap();
         self.flags.write_to(&mut buf).unwrap();
-        buf.write_all(&self.content_ptr.to_le_bytes()).unwrap();
-        buf.write_all(&self.content_len.to_le_bytes()).unwrap();
+        self.content.write_to(&mut buf).unwrap();
         buf.write_all(&self.doc_ends_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.doc_ends_len.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
@@ -101,8 +99,11 @@ impl ShardHeader {
         Ok(Self {
             version: u32::from_le_bytes(buf[0..4].try_into()?),
             flags: u32::from_le_bytes(buf[4..8].try_into()?),
-            content_ptr: u64::from_le_bytes(buf[8..16].try_into()?),
-            content_len: u64::from_le_bytes(buf[16..24].try_into()?),
+            // TODO: use read_from
+            content: SimpleSection {
+                offset: u64::from_le_bytes(buf[8..16].try_into()?),
+                len: u64::from_le_bytes(buf[16..24].try_into()?),
+            },
             doc_ends_ptr: u64::from_le_bytes(buf[24..32].try_into()?),
             doc_ends_len: u64::from_le_bytes(buf[32..40].try_into()?),
             sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
@@ -116,8 +117,7 @@ impl Default for ShardHeader {
         ShardHeader {
             version: Self::VERSION,
             flags: 0,
-            content_ptr: 0,
-            content_len: 0,
+            content: SimpleSection::default(),
             doc_ends_ptr: 0,
             doc_ends_len: 0,
             sa_ptr: 0,
