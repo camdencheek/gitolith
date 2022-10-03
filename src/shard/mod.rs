@@ -41,11 +41,9 @@ impl Shard {
     }
 
     fn from_file(file: File) -> Result<Self, Error> {
-        let mut buf = [0u8; ShardHeader::HEADER_SIZE];
-        file.read_at(&mut buf[..], 0)?;
-        let header = ShardHeader::read_from(&mut buf[..].reader())?;
-        let shard_file = Arc::new(ShardFile { file, header });
-        Ok(Self { file: shard_file })
+        Ok(Self {
+            file: Arc::new(ShardFile::from_file(file)?),
+        })
     }
 
     pub fn docs(&self) -> DocStore {

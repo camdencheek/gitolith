@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Error;
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 
 use crate::shard::docs::ContentIdx;
 
@@ -27,6 +27,16 @@ pub trait ShardBackend {
 pub struct ShardFile {
     pub file: File,
     pub header: ShardHeader,
+}
+
+impl ShardFile {
+    pub fn from_file(file: File) -> Result<Self, Error> {
+        let mut buf = [0u8; ShardHeader::HEADER_SIZE];
+        file.read_at(&mut buf[..], 0)?;
+        // TODO try using io::Cursor
+        let header = ShardHeader::read_from(&mut buf[..].reader())?;
+        Ok(Self { file, header })
+    }
 }
 
 impl ShardBackend for ShardFile {
