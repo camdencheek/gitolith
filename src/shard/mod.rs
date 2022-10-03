@@ -68,9 +68,8 @@ impl Shard {
 
 #[derive(Clone, Debug)]
 pub struct ShardHeader {
-    pub version: u16,
-    pub flags: u16,
-    pub _padding: u32,
+    pub version: u32,
+    pub flags: u32,
     pub content_ptr: u64,
     pub content_len: u64,
     pub doc_ends_ptr: u64,
@@ -80,15 +79,14 @@ pub struct ShardHeader {
 }
 
 impl ShardHeader {
-    const VERSION: u16 = 1;
+    const VERSION: u32 = 1;
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
-    const FLAG_COMPLETE: u16 = 1 << 0;
+    const FLAG_COMPLETE: u32 = 1 << 0;
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
         buf.write_all(&self.version.to_le_bytes()).unwrap();
         buf.write_all(&self.flags.to_le_bytes()).unwrap();
-        buf.write_all(&self._padding.to_le_bytes()).unwrap();
         buf.write_all(&self.content_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.content_len.to_le_bytes()).unwrap();
         buf.write_all(&self.doc_ends_ptr.to_le_bytes()).unwrap();
@@ -100,9 +98,8 @@ impl ShardHeader {
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
         Ok(Self {
-            version: u16::from_le_bytes(buf[0..2].try_into()?),
-            flags: u16::from_le_bytes(buf[2..4].try_into()?),
-            _padding: u32::from_le_bytes(buf[4..8].try_into()?),
+            version: u32::from_le_bytes(buf[0..4].try_into()?),
+            flags: u32::from_le_bytes(buf[4..8].try_into()?),
             content_ptr: u64::from_le_bytes(buf[8..16].try_into()?),
             content_len: u64::from_le_bytes(buf[16..24].try_into()?),
             doc_ends_ptr: u64::from_le_bytes(buf[24..32].try_into()?),
@@ -118,7 +115,6 @@ impl Default for ShardHeader {
         ShardHeader {
             version: Self::VERSION,
             flags: 0,
-            _padding: 0,
             content_ptr: 0,
             content_len: 0,
             doc_ends_ptr: 0,

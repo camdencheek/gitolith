@@ -137,7 +137,6 @@ impl ShardBuilder {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
-            _padding: 0,
             content_ptr,
             content_len,
             doc_ends_ptr,
