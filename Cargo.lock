@@ -89,12 +89,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytes"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -390,7 +384,6 @@ dependencies = [
  "anyhow",
  "bitvec",
  "bytefmt",
- "bytes",
  "clap 3.2.12",
  "criterion",
  "derive_more",
@@ -402,7 +395,6 @@ dependencies = [
  "radsort",
  "regex",
  "regex-syntax",
- "streaming-iterator",
  "stretto",
  "suffix",
  "tempfile",
@@ -977,12 +969,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "streaming-iterator"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4817bfdf8f0b576330b83b55bed0ec89204aa7da62c2fa11fad2119f33a70014"
 
 [[package]]
 name = "stretto"

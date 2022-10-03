@@ -1,17 +1,14 @@
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     os::unix::prelude::FileExt,
     sync::Arc,
 };
 
 use anyhow::Error;
-use bytes::{Buf, BufMut};
-
-use crate::shard::docs::ContentIdx;
 
 use super::{
-    docs::{DocEnds, DocID},
+    docs::{ContentIdx, DocEnds, DocID},
     suffix::{SuffixBlock, SuffixBlockID},
 };
 
@@ -33,8 +30,7 @@ impl ShardFile {
     pub fn from_file(file: File) -> Result<Self, Error> {
         let mut buf = [0u8; ShardHeader::HEADER_SIZE];
         file.read_at(&mut buf[..], 0)?;
-        // TODO try using io::Cursor
-        let header = ShardHeader::read_from(&mut buf[..].reader())?;
+        let header = ShardHeader::read_from(&mut Cursor::new(buf))?;
         Ok(Self { file, header })
     }
 }
@@ -105,7 +101,7 @@ impl ShardHeader {
     pub const FLAG_COMPLETE: u32 = 1 << 0;
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(ShardHeader::HEADER_SIZE).writer();
+        let mut buf = Cursor::new(Vec::with_capacity(ShardHeader::HEADER_SIZE));
         self.write_to(&mut buf).unwrap();
         buf.into_inner()
     }
