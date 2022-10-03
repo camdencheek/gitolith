@@ -135,12 +135,12 @@ fn list(args: ListArgs) -> Result<(), Error> {
 
     let handle = std::io::stdout().lock();
     let mut buf = std::io::BufWriter::new(handle);
-    let doc_ends = s.docs.read_doc_ends()?;
-    for doc_id in s.docs.doc_ids() {
+    let doc_ends = s.docs().read_doc_ends()?;
+    for doc_id in s.docs().doc_ids() {
         buf.write_fmt(format_args!("DocID: {}\n", u32::from(doc_id)))?;
         buf.write_fmt(format_args!(
             "===============\n{}\n===============\n",
-            std::str::from_utf8(&s.docs.read_content(doc_id, &doc_ends)?)?
+            std::str::from_utf8(&s.docs().read_content(doc_id, &doc_ends)?)?
         ))?;
     }
     Ok(())
