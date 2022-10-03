@@ -655,6 +655,6 @@ mod test {
         assert_count(shard.clone(), r".*", 7);
         assert_count(shard.clone(), r"(?s).*", 6);
         assert_count(shard.clone(), r"\w+", 15);
-        // assert_count(shard.clone(), "(?i)contains case sensitive", 1);
+        assert_count(shard.clone(), "(?i)contains case sensitive", 1);
     }
 }

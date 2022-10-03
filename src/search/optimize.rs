@@ -56,7 +56,11 @@ fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiteral
     res.sort_by_key(|concat| concat.len());
     res.truncate(4);
 
-    OptimizedLiterals::Inexact(res)
+    if res.len() > 0 {
+        OptimizedLiterals::Inexact(res)
+    } else {
+        OptimizedLiterals::None
+    }
 }
 
 fn optimize_inexact_literal(concat: ConcatLiteralSet) -> Option<Vec<ConcatLiteralSet>> {
