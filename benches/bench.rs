@@ -54,8 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         "/Users/camdencheek/src/linux".into(),
     )
     .unwrap();
-    let shard = Shard::open(&Path::new("/tmp/shardlinux")).unwrap();
-    // let cache = new_cache(256 * 1024 * 1024);
+    let shard = Shard::open_default(&Path::new("/tmp/shardlinux")).unwrap();
 
     for query in &[
         "torvalds",

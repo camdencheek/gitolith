@@ -4,7 +4,12 @@ pub mod docs;
 pub mod file;
 pub mod suffix;
 
-use self::file::{ShardFile, ShardStore};
+use crate::cache;
+
+use self::{
+    cached_file::CachedShardFile,
+    file::{ShardFile, ShardStore},
+};
 use anyhow::Error;
 use std::fs::File;
 use std::path::Path;
@@ -34,15 +39,11 @@ impl Shard {
         Self { file: store }
     }
 
-    pub fn open(path: &Path) -> Result<Self, Error> {
-        let f = File::open(path)?;
-        Self::from_file(f)
-    }
-
-    fn from_file(file: File) -> Result<Self, Error> {
-        Ok(Self {
-            file: Arc::new(ShardFile::from_file(file)?),
-        })
+    pub fn open_default(path: &Path) -> Result<Self, Error> {
+        let f = ShardFile::from_file(File::open(path)?)?;
+        let c = cache::new_cache(512 * 1024 * 1024);
+        let cached_store = Arc::new(CachedShardFile::new(ShardID(0), c, f));
+        Ok(Self { file: cached_store })
     }
 
     pub fn docs(&self) -> DocStore {

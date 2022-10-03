@@ -2,9 +2,12 @@
 
 use anyhow::Error;
 use clap::{Parser, Subcommand};
+use gitserver3::shard::cached_file::CachedShardFile;
+use gitserver3::shard::file::ShardFile;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -76,10 +79,12 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         Some(s) => bytefmt::parse(&s).expect("failed to parse cache size"),
         None => 256 * 1024 * 1024,
     };
-    let cs = Shard::open(&args.shard)?;
-    // let content_size = s.file.header().docs.data.len;
-    // let c = cache::new_cache(cache_size); // 4 GiB
-    // let cs = CachedShard::new(ShardID(0), s, c);
+    let csf = Arc::new(CachedShardFile::new(
+        ShardID(0),
+        cache::new_cache(cache_size),
+        ShardFile::from_file(File::open(args.shard)?)?,
+    ));
+    let cs = Shard::from_store(csf);
 
     for i in 0..args.repeat {
         let start = Instant::now();
@@ -130,7 +135,7 @@ fn search(args: SearchArgs) -> Result<(), Error> {
 }
 
 fn list(args: ListArgs) -> Result<(), Error> {
-    let s = Shard::open(&args.shard)?;
+    let s = Shard::open_default(&args.shard)?;
 
     let handle = std::io::stdout().lock();
     let mut buf = std::io::BufWriter::new(handle);
