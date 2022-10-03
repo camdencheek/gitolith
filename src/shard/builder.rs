@@ -55,15 +55,13 @@ impl ShardBuilder {
     pub fn build(mut self) -> Result<ShardFile, Error> {
         let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
         let doc_ends_section = Self::build_docs(&mut self.file, &self.doc_ends)?;
-        let (suffix_ptr, suffix_len) =
-            Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
+        let sa_section = Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
         Self::build_header(
             &self.file,
             content_ptr,
             content_len.into(),
             doc_ends_section,
-            suffix_ptr,
-            suffix_len.into(),
+            sa_section,
         )?;
         ShardFile::from_file(self.file)
     }
@@ -95,7 +93,7 @@ impl ShardBuilder {
         file: &mut File,
         content_ptr: u64,
         content_len: u32,
-    ) -> Result<(u64, u32), Error> {
+    ) -> Result<SimpleSection, Error> {
         let sa_start = {
             let current_position = file.seek(io::SeekFrom::Current(0))?;
 
@@ -124,7 +122,10 @@ impl ShardBuilder {
             table::sais(sa, &mut stypes, &mut bins, &CIBytes(content_data));
             sa_start
         };
-        Ok((sa_start, content_len))
+        Ok(SimpleSection {
+            offset: sa_start,
+            len: content_len as u64 * std::mem::size_of::<u32>() as u64,
+        })
     }
 
     fn build_header(
@@ -132,8 +133,7 @@ impl ShardBuilder {
         content_ptr: u64,
         content_len: u64,
         doc_ends_section: SimpleSection,
-        sa_ptr: u64,
-        sa_len: u64,
+        sa_section: SimpleSection,
     ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
@@ -145,10 +145,7 @@ impl ShardBuilder {
                 },
                 offsets: doc_ends_section,
             },
-            sa: SimpleSection {
-                offset: sa_ptr,
-                len: sa_len * std::mem::size_of::<u32>() as u64,
-            },
+            sa: sa_section,
         };
         file.write_all_at(&header.to_bytes(), 0)?;
         Ok(header)
