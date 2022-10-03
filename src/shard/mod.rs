@@ -53,8 +53,8 @@ impl Shard {
         let docs = DocStore::new(
             Arc::clone(&file),
             content.clone(),
-            header.doc_ends_ptr,
-            header.doc_ends_len as u32,
+            header.doc_ends.offset,
+            header.doc_ends.len as u32,
         );
         let suffixes =
             SuffixArrayStore::new(Arc::clone(&file), header.sa_ptr, header.sa_len as u32);
@@ -72,8 +72,7 @@ pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
     pub content: SimpleSection,
-    pub doc_ends_ptr: u64,
-    pub doc_ends_len: u64,
+    pub doc_ends: SimpleSection,
     pub sa_ptr: u64,
     pub sa_len: u64,
 }
@@ -88,8 +87,7 @@ impl ShardHeader {
         self.version.write_to(&mut buf).unwrap();
         self.flags.write_to(&mut buf).unwrap();
         self.content.write_to(&mut buf).unwrap();
-        buf.write_all(&self.doc_ends_ptr.to_le_bytes()).unwrap();
-        buf.write_all(&self.doc_ends_len.to_le_bytes()).unwrap();
+        self.doc_ends.write_to(&mut buf).unwrap();
         buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_len.to_le_bytes()).unwrap();
         buf.into_inner()
@@ -104,8 +102,10 @@ impl ShardHeader {
                 offset: u64::from_le_bytes(buf[8..16].try_into()?),
                 len: u64::from_le_bytes(buf[16..24].try_into()?),
             },
-            doc_ends_ptr: u64::from_le_bytes(buf[24..32].try_into()?),
-            doc_ends_len: u64::from_le_bytes(buf[32..40].try_into()?),
+            doc_ends: SimpleSection {
+                offset: u64::from_le_bytes(buf[24..32].try_into()?),
+                len: u64::from_le_bytes(buf[32..40].try_into()?),
+            },
             sa_ptr: u64::from_le_bytes(buf[40..48].try_into()?),
             sa_len: u64::from_le_bytes(buf[48..56].try_into()?),
         })
@@ -118,8 +118,7 @@ impl Default for ShardHeader {
             version: Self::VERSION,
             flags: 0,
             content: SimpleSection::default(),
-            doc_ends_ptr: 0,
-            doc_ends_len: 0,
+            doc_ends: SimpleSection::default(),
             sa_ptr: 0,
             sa_len: 0,
         }

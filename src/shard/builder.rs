@@ -141,8 +141,10 @@ impl ShardBuilder {
                 offset: content_ptr,
                 len: content_len,
             },
-            doc_ends_ptr,
-            doc_ends_len,
+            doc_ends: SimpleSection {
+                offset: doc_ends_ptr,
+                len: doc_ends_len,
+            },
             sa_ptr,
             sa_len,
         };
