@@ -37,10 +37,7 @@ impl ShardBuilder {
     }
 
     // Adds a doc to the index and returns its ID
-    pub fn add_doc<T>(&mut self, mut doc: T) -> Result<DocID, io::Error>
-    where
-        T: Read,
-    {
+    pub fn add_doc<T: Read>(&mut self, mut doc: T) -> Result<DocID, Error> {
         // Copy the document into the index
         let doc_len = io::copy(&mut doc, &mut self.file)?;
 
