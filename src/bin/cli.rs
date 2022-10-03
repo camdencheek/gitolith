@@ -3,7 +3,9 @@
 use anyhow::Error;
 use clap::{Parser, Subcommand};
 use gitserver3::shard::cached_file::CachedShardFile;
+use gitserver3::shard::docs::{ContentIdx, DocID};
 use gitserver3::shard::file::{ShardFile, ShardStore};
+use gitserver3::shard::suffix::{SuffixArrayStore, SuffixBlockID, SuffixIdx};
 use regex::bytes::Regex;
 use std::fs::File;
 use std::io::Write;
@@ -27,7 +29,7 @@ pub struct Cli {
 pub enum Command {
     Index(IndexArgs),
     Search(SearchArgs),
-    List(ListArgs),
+    Debug(DebugArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -59,8 +61,41 @@ pub struct SearchArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct ListArgs {
+pub struct DebugArgs {
     pub shard: PathBuf,
+    #[clap(subcommand)]
+    pub debug_command: DebugCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DebugCommand {
+    Docs,
+    DocContent(DocIDArg),
+    DocBounds(DocIDArg),
+    SuffixContentIdx(SuffixIDArg),
+    Content(ContentIDArg),
+    SuffixBlock(SuffixIDArg),
+    Block(BlockIDArg),
+}
+
+#[derive(Parser, Debug)]
+pub struct DocIDArg {
+    id: u32,
+}
+
+#[derive(Parser, Debug)]
+pub struct BlockIDArg {
+    id: u32,
+}
+
+#[derive(Parser, Debug)]
+pub struct SuffixIDArg {
+    id: u32,
+}
+
+#[derive(Parser, Debug)]
+pub struct ContentIDArg {
+    id: u32,
 }
 
 fn main() -> Result<(), Error> {
@@ -68,7 +103,7 @@ fn main() -> Result<(), Error> {
     match args.cmd {
         Command::Index(a) => build_index(a)?,
         Command::Search(a) => search(a)?,
-        Command::List(a) => list(a)?,
+        Command::Debug(a) => debug(a)?,
     }
     Ok(())
 }
@@ -136,22 +171,6 @@ fn search(args: SearchArgs) -> Result<(), Error> {
     Ok(())
 }
 
-fn list(args: ListArgs) -> Result<(), Error> {
-    let s = Shard::open_default(&args.shard)?;
-
-    let handle = std::io::stdout().lock();
-    let mut buf = std::io::BufWriter::new(handle);
-    let doc_ends = s.docs().read_doc_ends()?;
-    for doc_id in s.docs().doc_ids() {
-        buf.write_fmt(format_args!("DocID: {}\n", u32::from(doc_id)))?;
-        buf.write_fmt(format_args!(
-            "===============\n{}\n===============\n",
-            std::str::from_utf8(&s.docs().read_content(doc_id, &doc_ends)?)?
-        ))?;
-    }
-    Ok(())
-}
-
 fn build_index(args: IndexArgs) -> Result<(), Error> {
     if let Some(dir) = args.dir {
         build_directory_index(args.output_shard, dir)
@@ -186,5 +205,88 @@ fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Error> {
     let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
     builder.add_doc(s.as_bytes())?;
     builder.build()?;
+    Ok(())
+}
+
+fn debug(args: DebugArgs) -> Result<(), Error> {
+    let shard = Shard::open_default(&args.shard)?;
+
+    match args.debug_command {
+        DebugCommand::Docs => print_docs(shard)?,
+        DebugCommand::DocContent(doc_id) => print_doc_content(shard, doc_id.id)?,
+        DebugCommand::DocBounds(doc_id) => print_doc_bounds(shard, doc_id.id)?,
+        DebugCommand::SuffixContentIdx(suffix_id) => print_suffix_content_idx(shard, suffix_id.id)?,
+        DebugCommand::Content(content_idx) => print_content(shard, content_idx.id)?,
+        DebugCommand::SuffixBlock(suffix_id) => print_suffix_block(suffix_id.id)?,
+        DebugCommand::Block(block_id) => print_block(shard, block_id.id)?,
+    }
+
+    Ok(())
+}
+
+fn print_docs(shard: Shard) -> Result<(), Error> {
+    let doc_ends = shard.docs().read_doc_ends()?;
+    for doc in doc_ends.iter_docs() {
+        println!(
+            "ID: {}, [{}..{}]",
+            u32::from(doc),
+            u32::from(doc_ends.doc_start(doc)),
+            u32::from(doc_ends.doc_end(doc))
+        );
+    }
+    Ok(())
+}
+
+fn print_doc_content(shard: Shard, doc_id: u32) -> Result<(), Error> {
+    let doc_ends = shard.docs().read_doc_ends()?;
+    let content = shard.docs().read_content(DocID(doc_id), &doc_ends)?;
+    let mut handle = std::io::stdout().lock();
+    handle.write(&content)?;
+    Ok(())
+}
+
+fn print_doc_bounds(shard: Shard, doc_id: u32) -> Result<(), Error> {
+    let doc_ends = shard.docs().read_doc_ends()?;
+    println!(
+        "[{}..{}]",
+        u32::from(doc_ends.doc_start(DocID(doc_id))),
+        u32::from(doc_ends.doc_end(DocID(doc_id)))
+    );
+    Ok(())
+}
+
+fn print_suffix_content_idx(shard: Shard, suffix_id: u32) -> Result<(), Error> {
+    let (block_id, offset) = SuffixArrayStore::block_id_for_suffix(SuffixIdx(suffix_id));
+    let block = shard.suffixes().read_block(block_id)?;
+    println!("{}", u32::from(block.0[offset]),);
+    Ok(())
+}
+
+fn print_content(shard: Shard, content_id: u32) -> Result<(), Error> {
+    let docs = shard.docs();
+    let doc_ends = shard.docs().read_doc_ends()?;
+    let doc_id = doc_ends.find(ContentIdx(content_id));
+    let doc_start = doc_ends.doc_start(doc_id);
+    let offset = content_id - u32::from(doc_start);
+    let doc_content = docs.read_content(doc_id, &doc_ends)?;
+    let suffix = &doc_content[offset as usize..];
+    let mut handle = std::io::stdout().lock();
+    handle.write(&suffix)?;
+    Ok(())
+}
+
+fn print_block(shard: Shard, suffix_block_id: u32) -> Result<(), Error> {
+    let block = shard
+        .suffixes()
+        .read_block(SuffixBlockID(suffix_block_id))?;
+    for suffix in block.0.iter().cloned() {
+        println!("{}", u32::from(suffix))
+    }
+    Ok(())
+}
+
+fn print_suffix_block(suffix_idx: u32) -> Result<(), Error> {
+    let (block_id, offset) = SuffixArrayStore::block_id_for_suffix(SuffixIdx(suffix_idx));
+    println!("{}, offset {}", u32::from(block_id), offset);
     Ok(())
 }

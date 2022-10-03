@@ -88,7 +88,7 @@ impl DocStore {
 
 // TODO this can be slightly more efficient as a boxed slice
 #[derive(Debug)]
-pub struct DocEnds(Vec<ContentIdx>);
+pub struct DocEnds(pub Vec<ContentIdx>);
 
 // TODO consider compressing doc ends with Elias Fano to minimize memory impact.
 impl DocEnds {
