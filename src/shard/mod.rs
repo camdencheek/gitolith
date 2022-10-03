@@ -10,6 +10,7 @@ use std::path::Path;
 pub mod docs;
 // use super::cache::Cache;
 use super::shard::suffix::SuffixArrayStore;
+use bytes::BufMut;
 use content::ContentStore;
 use derive_more::{Add, From, Into, Sub};
 use docs::DocStore;
@@ -84,16 +85,16 @@ impl ShardHeader {
     const FLAG_COMPLETE: u32 = 1 << 0;
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize);
-        buf.write_all(&self.version.to_le_bytes()).unwrap();
-        buf.write_all(&self.flags.to_le_bytes()).unwrap();
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize).writer();
+        self.version.write_to(&mut buf).unwrap();
+        self.flags.write_to(&mut buf).unwrap();
         buf.write_all(&self.content_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.content_len.to_le_bytes()).unwrap();
         buf.write_all(&self.doc_ends_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.doc_ends_len.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_ptr.to_le_bytes()).unwrap();
         buf.write_all(&self.sa_len.to_le_bytes()).unwrap();
-        buf
+        buf.into_inner()
     }
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
