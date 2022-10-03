@@ -42,7 +42,7 @@ impl Shard {
     fn from_file(file: File) -> Result<Self, Error> {
         let mut buf = [0u8; ShardHeader::HEADER_SIZE];
         file.read_at(&mut buf[..], 0)?;
-        let header = ShardHeader::from_bytes(&buf[..])?;
+        let header = ShardHeader::read_from(&mut buf[..].reader())?;
 
         let file = Arc::new(file);
         let content = ContentStore::new(
@@ -81,24 +81,23 @@ impl ShardHeader {
     const HEADER_SIZE: usize = 1 << 13; /* 8192 */
     const FLAG_COMPLETE: u32 = 1 << 0;
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(Self::HEADER_SIZE as usize).writer();
-        self.version.write_to(&mut buf).unwrap();
-        self.flags.write_to(&mut buf).unwrap();
-        self.content.write_to(&mut buf).unwrap();
-        self.doc_ends.write_to(&mut buf).unwrap();
-        self.sa.write_to(&mut buf).unwrap();
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(ShardHeader::HEADER_SIZE).writer();
+        self.write_to(&mut buf).unwrap();
         buf.into_inner()
     }
+}
 
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
-        let mut r = buf.reader();
-
-        let version = u32::read_from(&mut r)?;
-        let flags = u32::read_from(&mut r)?;
-        let content = SimpleSection::read_from(&mut r)?;
-        let doc_ends = SimpleSection::read_from(&mut r)?;
-        let sa = SimpleSection::read_from(&mut r)?;
+impl ReadWriteStream for ShardHeader {
+    fn read_from<R: Read>(r: &mut R) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
+        let version = u32::read_from(r)?;
+        let flags = u32::read_from(r)?;
+        let content = SimpleSection::read_from(r)?;
+        let doc_ends = SimpleSection::read_from(r)?;
+        let sa = SimpleSection::read_from(r)?;
 
         Ok(Self {
             version,
@@ -107,6 +106,16 @@ impl ShardHeader {
             doc_ends,
             sa,
         })
+    }
+
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<usize, Error> {
+        let mut n = 0;
+        n += self.version.write_to(w)?;
+        n += self.flags.write_to(w)?;
+        n += self.content.write_to(w)?;
+        n += self.doc_ends.write_to(w)?;
+        n += self.sa.write_to(w)?;
+        Ok(n)
     }
 }
 
