@@ -467,9 +467,7 @@ mod test {
 
     use crate::{
         cache,
-        shard::{
-            builder::ShardBuilder, cached_file::CachedShardFile, file::ShardBackend, Shard, ShardID,
-        },
+        shard::{builder::ShardBuilder, cached_file::CachedShardFile, Shard, ShardID},
     };
 
     use super::search_regex;

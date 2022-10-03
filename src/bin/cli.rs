@@ -3,7 +3,7 @@
 use anyhow::Error;
 use clap::{Parser, Subcommand};
 use gitserver3::shard::cached_file::CachedShardFile;
-use gitserver3::shard::file::ShardFile;
+use gitserver3::shard::file::{ShardFile, ShardStore};
 use regex::bytes::Regex;
 use std::fs::File;
 use std::io::Write;
@@ -54,6 +54,8 @@ pub struct SearchArgs {
     pub limit: Option<usize>,
     #[clap(long = "cache-size")]
     pub cache_size: Option<String>,
+    #[clap(long = "no-cache")]
+    pub no_cache: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -76,11 +78,15 @@ fn search(args: SearchArgs) -> Result<(), Error> {
         Some(s) => bytefmt::parse(&s).expect("failed to parse cache size"),
         None => 256 * 1024 * 1024,
     };
-    let csf = Arc::new(CachedShardFile::new(
-        ShardID(0),
-        cache::new_cache(cache_size),
-        ShardFile::from_file(File::open(args.shard)?)?,
-    ));
+    let csf: ShardStore = if args.no_cache {
+        Arc::new(ShardFile::from_file(File::open(args.shard)?)?)
+    } else {
+        Arc::new(CachedShardFile::new(
+            ShardID(0),
+            cache::new_cache(cache_size),
+            ShardFile::from_file(File::open(args.shard)?)?,
+        ))
+    };
     let cs = Shard::from_store(csf);
     let re = Regex::new(&args.query)?;
 
