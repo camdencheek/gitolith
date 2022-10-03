@@ -61,10 +61,6 @@ pub struct ListArgs {
 }
 
 fn main() -> Result<(), Error> {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(8)
-        .build_global()?;
-
     let args = Cli::parse();
     match args.cmd {
         Command::Index(a) => build_index(a)?,
@@ -89,46 +85,44 @@ fn search(args: SearchArgs) -> Result<(), Error> {
     for i in 0..args.repeat {
         let start = Instant::now();
 
-        rayon::in_place_scope_fifo(|s| -> Result<(), Error> {
-            let handle = std::io::stdout().lock();
-            let mut buf = std::io::BufWriter::new(handle);
+        let handle = std::io::stdout().lock();
+        let mut buf = std::io::BufWriter::new(handle);
 
-            let mut count = 0;
-            let mut limit = args.limit.unwrap_or(usize::MAX);
+        let mut count = 0;
+        let mut limit = args.limit.unwrap_or(usize::MAX);
 
-            for mut doc_match in search_regex(cs.clone(), &args.query, args.skip_index, s)? {
-                doc_match.matches.truncate(limit);
-                limit -= doc_match.matches.len();
+        for mut doc_match in search_regex(cs.clone(), &args.query, args.skip_index)? {
+            doc_match.matches.truncate(limit);
+            limit -= doc_match.matches.len();
+            if !args.count_only {
+                buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
+            }
+            for r in doc_match.matches {
+                count += 1;
+
                 if !args.count_only {
-                    buf.write_fmt(format_args!("{:?}:\n", doc_match.id))?;
-                }
-                for r in doc_match.matches {
-                    count += 1;
-
-                    if !args.count_only {
-                        buf.write_fmt(format_args!(
-                            "{}\n",
-                            String::from_utf8_lossy(
-                                &doc_match.content[r.start as usize..r.end as usize]
-                            ),
-                        ))?;
-                    }
-                }
-                if limit == 0 {
-                    break;
+                    buf.write_fmt(format_args!(
+                        "{}\n",
+                        String::from_utf8_lossy(
+                            &doc_match.content[r.start as usize..r.end as usize]
+                        ),
+                    ))?;
                 }
             }
-            buf.flush()?;
+            if limit == 0 {
+                break;
+            }
+        }
 
-            println!(
-                "Iter: {}, Searched: , Match Count: {}, Elapsed: {:3.2?}",
-                i,
-                // bytefmt::format(content_size),
-                count,
-                start.elapsed()
-            );
-            Ok(())
-        })?;
+        buf.write_fmt(format_args!(
+            "Iter: {}, Searched: , Match Count: {}, Elapsed: {:3.2?}\n",
+            i,
+            // bytefmt::format(content_size),
+            count,
+            start.elapsed()
+        ))?;
+
+        buf.flush()?;
     }
 
     Ok(())

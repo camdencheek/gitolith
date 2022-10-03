@@ -312,6 +312,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dpc-pariter"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a6f60e0061d01135c7e9b77486a7f5a8e63ba14acbdbca73e42007cfd8a1c91"
+dependencies = [
+ "pariter",
+]
+
+[[package]]
 name = "either"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -384,14 +393,13 @@ dependencies = [
  "bytes",
  "clap 3.2.12",
  "criterion",
- "crossbeam",
  "derive_more",
+ "dpc-pariter",
  "fnv",
  "git2",
  "itertools",
  "memmap2",
  "radsort",
- "rayon",
  "regex",
  "regex-syntax",
  "streaming-iterator",
@@ -654,6 +662,17 @@ name = "os_str_bytes"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21326818e99cfe6ce1e524c2a805c189a99b5ae555a35d19f9a284b427d86afa"
+
+[[package]]
+name = "pariter"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "324a62b9e7b5f270c0acc92a2040f8028bb643f959f9c068f11a7864f327e3d9"
+dependencies = [
+ "crossbeam",
+ "crossbeam-channel",
+ "num_cpus",
+]
 
 [[package]]
 name = "parking_lot"

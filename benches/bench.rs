@@ -13,12 +13,10 @@ use gitserver3::{
 use walkdir::WalkDir;
 
 fn search_shard(shard: Shard, query: &str) -> usize {
-    rayon::in_place_scope_fifo(|s| -> usize {
-        search_regex(shard, query, false, s)
-            .unwrap()
-            .map(|dm| dm.matches.len())
-            .sum()
-    })
+    search_regex(shard, query, false)
+        .unwrap()
+        .map(|dm| dm.matches.len())
+        .sum()
 }
 
 fn maybe_build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Error> {

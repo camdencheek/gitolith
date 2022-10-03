@@ -1,8 +1,8 @@
 use anyhow::Error;
 use bitvec::{self, vec::BitVec};
-use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
+use dpc_pariter::IteratorExt;
 use radsort;
-use std::iter::{Cycle, Peekable};
+use std::iter::Peekable;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -35,7 +35,6 @@ pub fn search_regex<'a>(
     s: Shard,
     query: &'_ str,
     skip_index: bool,
-    scope: &'a rayon::ScopeFifo,
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
     let ast = regex_syntax::ast::parse::Parser::new().parse(query)?;
     let hir = regex_syntax::hir::translate::Translator::new().translate(query, &ast)?;
@@ -49,14 +48,11 @@ pub fn search_regex<'a>(
     let extracted = extracted.to_lower_ascii();
     let optimized = optimize_extracted(extracted);
     match optimized {
-        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s, scope)),
-        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(query, s, set, scope),
-        OptimizedLiterals::Inexact(all) => Ok(new_inexact_match_iterator(
-            Regex::new(query)?,
-            s,
-            all,
-            scope,
-        )),
+        OptimizedLiterals::None => Ok(new_unindexed_match_iterator(Regex::new(query)?, s)),
+        OptimizedLiterals::OrderedExact(set) => new_exact_match_iterator(query, s, set),
+        OptimizedLiterals::Inexact(all) => {
+            Ok(new_inexact_match_iterator(Regex::new(query)?, s, all))
+        }
     }
 }
 
@@ -64,7 +60,6 @@ fn new_exact_match_iterator<'a>(
     query: &str,
     shard: Shard,
     literals: Vec<ConcatLiteralSet>,
-    scope: &'a rayon::ScopeFifo,
 ) -> Result<Box<dyn Iterator<Item = DocMatch> + 'a>, Error> {
     let suffixes = shard.suffixes();
 
@@ -87,7 +82,6 @@ fn new_exact_match_iterator<'a>(
                 Regex::new(query)?,
                 shard,
                 literals,
-                scope,
             ));
         }
         let mut content_indexes: Vec<(ContentIdx, u32)> = Vec::with_capacity(content_idx_count);
@@ -109,7 +103,6 @@ fn new_inexact_match_iterator<'a>(
     re: Regex,
     shard: Shard,
     literals: Vec<ConcatLiteralSet>,
-    scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
     let doc_ends = shard.docs().read_doc_ends().unwrap();
     let suffixes = shard.suffixes();
@@ -128,7 +121,7 @@ fn new_inexact_match_iterator<'a>(
         .map(|content_idx_iter| ContentIdxDocIterator::new(doc_ends.clone(), content_idx_iter))
         .collect();
     let filtered = AndDocIterator::new(content_idx_iters)
-        .par_map(scope, 32, move |doc_id| -> DocMatch {
+        .parallel_map(move |doc_id| -> DocMatch {
             let content = docs.read_content(doc_id, &doc_ends).unwrap();
             let matched_ranges: Vec<Range<u32>> = re
                 .find_iter(&content)
@@ -148,7 +141,6 @@ fn new_inexact_match_iterator<'a>(
 fn new_unindexed_match_iterator<'a>(
     re: Regex,
     shard: Shard,
-    scope: &'a rayon::ScopeFifo,
 ) -> Box<dyn Iterator<Item = DocMatch> + 'a> {
     let doc_ends = shard.docs().read_doc_ends().unwrap();
     let doc_ids = shard.docs().doc_ids();
@@ -156,7 +148,7 @@ fn new_unindexed_match_iterator<'a>(
     let docs = Arc::new(shard.docs());
     Box::new(
         doc_ids
-            .par_map(scope, 128, move |doc_id| -> DocMatch {
+            .parallel_map(move |doc_id| -> DocMatch {
                 let content = docs.read_content(doc_id, &doc_ends).unwrap();
                 let matched_ranges: Vec<Range<u32>> = re
                     .find_iter(&content)
@@ -169,7 +161,6 @@ fn new_unindexed_match_iterator<'a>(
                     content,
                 }
             })
-            // TODO would a par_filter_map be more efficient here?
             .filter(|doc_match| !doc_match.matches.is_empty()),
     )
 }
@@ -478,130 +469,9 @@ impl Iterator for ContentIdxIterator {
     }
 }
 
-struct ParallelMap<'a, 'scope, T, R, I, F>
-where
-    I: Iterator<Item = T>,
-{
-    f: F,
-    input: I,
-    scope: &'a rayon::ScopeFifo<'scope>,
-    senders: Vec<Sender<R>>,
-    receivers: Vec<Receiver<R>>,
-    next_receiver: Cycle<Range<usize>>,
-}
-
-impl<'a, 'scope, T, R, I, F> ParallelMap<'a, 'scope, T, R, I, F>
-where
-    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
-    I: Iterator<Item = T>,
-    T: Send + 'static,
-    R: Send + 'static,
-{
-    fn new(input: I, scope: &'a rayon::ScopeFifo<'scope>, max_parallel: usize, f: F) -> Self {
-        Self {
-            f,
-            input,
-            scope,
-            senders: Vec::with_capacity(max_parallel),
-            receivers: Vec::with_capacity(max_parallel),
-            next_receiver: (0..max_parallel).cycle(),
-        }
-    }
-
-    fn start_once(&mut self) {
-        if !self.senders.is_empty() {
-            return;
-        }
-
-        for i in 0..self.senders.capacity() {
-            let (tx, rx) = bounded(1);
-            self.receivers.push(rx);
-            self.senders.push(tx);
-            self.spawn_task(i);
-        }
-    }
-
-    fn spawn_task(&mut self, idx: usize) {
-        let next_input = match self.input.next() {
-            Some(n) => n,
-            None => {
-                // Kinda hacky: replace the sender at the current
-                // index in order to drop the one that was previously
-                // there, closing the channel.
-                let (tx, _) = bounded(1);
-                self.senders[idx] = tx;
-                return;
-            }
-        };
-
-        let tx = self.senders[idx].clone();
-        let f = self.f.clone();
-        self.scope.spawn_fifo(move |_| {
-            let r = f(next_input);
-            tx.send(r).ok();
-        });
-    }
-}
-
-impl<'a, 'scope, T, R, I, F> Iterator for ParallelMap<'a, 'scope, T, R, I, F>
-where
-    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
-    I: Iterator<Item = T>,
-    T: Send + 'static,
-    R: Send + 'static,
-{
-    type Item = R;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.start_once();
-
-        let idx = self.next_receiver.next().unwrap();
-        let rx = self.receivers[idx].clone();
-        match rx.recv() {
-            Err(RecvError) => None,
-            Ok(r) => {
-                self.spawn_task(idx);
-                Some(r)
-            }
-        }
-    }
-}
-
-trait IteratorExt<'a, 'scope, T, R, I, F>
-where
-    I: Iterator<Item = T>,
-{
-    // Guarantees the same order
-    fn par_map(
-        self,
-        scope: &'a rayon::ScopeFifo<'scope>,
-        max_parallel: usize,
-        f: F,
-    ) -> ParallelMap<'a, 'scope, T, R, I, F>;
-}
-
-impl<'a, 'scope, T, R, I, F> IteratorExt<'a, 'scope, T, R, I, F> for I
-where
-    F: Fn(T) -> R + Send + Sync + Clone + 'scope,
-    I: Iterator<Item = T>,
-    T: Send + 'static,
-    R: Send + 'static,
-{
-    fn par_map(
-        self,
-        scope: &'a rayon::ScopeFifo<'scope>,
-        max_parallel: usize,
-        f: F,
-    ) -> ParallelMap<'a, 'scope, T, R, I, F> {
-        ParallelMap::new(self, scope, max_parallel, f)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::{path::Path, sync::Arc};
-
-    use rayon::scope_fifo;
 
     use crate::{
         cache,
@@ -631,17 +501,15 @@ mod test {
     }
 
     fn assert_count(s: Shard, re: &str, want_count: usize) {
-        scope_fifo(|scope| {
-            let got_count: usize = search_regex(s, re, false, scope)
-                .unwrap()
-                .map(|doc_match| doc_match.matches.len())
-                .sum();
-            assert_eq!(
-                want_count, got_count,
-                "expected different count for re '{}'",
-                re
-            );
-        })
+        let got_count: usize = search_regex(s, re, false)
+            .unwrap()
+            .map(|doc_match| doc_match.matches.len())
+            .sum();
+        assert_eq!(
+            want_count, got_count,
+            "expected different count for re '{}'",
+            re
+        );
     }
 
     #[test]

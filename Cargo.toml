@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 clap = { version = "3.2.12", features = ["derive"]}
 itertools = "0.10.3"
-rayon = "1.5.3"
 regex = "1.6.0"
 regex-syntax = "0.6" 
 suffix = { path = "./vendor/suffix" }
@@ -17,7 +16,6 @@ thiserror = "1.0.31"
 memmap2 = "0.5.5"
 derive_more = "0.99.17"
 anyhow = "1.0.58"
-crossbeam = {version = "0.8.2", features = ["crossbeam-channel"]}
 bitvec = "1.0.1"
 stretto = "0.6.2"
 bytefmt = "0.1.7"
@@ -26,6 +24,7 @@ streaming-iterator = { version = "0.1.6", features = ["std"]}
 git2 = { version = "0.15", features = ["vendored-libgit2"]}
 radsort = "0.1.0"
 bytes = "1.2.1"
+dpc-pariter = "0.5.1"
 
 [profile.release]
 debug = true
