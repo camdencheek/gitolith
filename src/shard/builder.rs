@@ -1,6 +1,7 @@
 use super::docs::DocID;
+use super::file::{CompoundSection, ShardHeader, SimpleSection};
 use super::suffix::SuffixBlock;
-use super::{CompoundSection, Shard, ShardHeader, SimpleSection};
+use super::Shard;
 use crate::strcmp::AsciiLowerIter;
 use anyhow::Error;
 use memmap2::MmapMut;
