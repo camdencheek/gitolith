@@ -53,26 +53,20 @@ impl ShardBuilder {
     }
 
     pub fn build(mut self) -> Result<ShardFile, Error> {
-        let (content_ptr, content_len) = Self::build_content(&self.doc_ends);
+        let content_section = Self::build_content(&self.doc_ends);
         let doc_ends_section = Self::build_docs(&mut self.file, &self.doc_ends)?;
-        let sa_section = Self::build_suffix_array(&mut self.file, content_ptr, content_len)?;
-        Self::build_header(
-            &self.file,
-            content_ptr,
-            content_len.into(),
-            doc_ends_section,
-            sa_section,
-        )?;
+        let sa_section = Self::build_suffix_array(&mut self.file, content_section.clone())?;
+        Self::build_header(&self.file, content_section, doc_ends_section, sa_section)?;
         ShardFile::from_file(self.file)
     }
 
-    fn build_content(doc_ends: &[u32]) -> (u64, u32) {
+    fn build_content(doc_ends: &[u32]) -> SimpleSection {
         // The data on disk is build incrementally during add_doc,
         // so just return the content range here
-        (
-            ShardHeader::HEADER_SIZE as u64,
-            *doc_ends.last().unwrap_or(&0),
-        )
+        SimpleSection {
+            offset: ShardHeader::HEADER_SIZE as u64,
+            len: *doc_ends.last().unwrap_or(&0) as u64,
+        }
     }
 
     fn build_docs(file: &mut File, doc_ends: &Vec<u32>) -> Result<SimpleSection, io::Error> {
@@ -91,14 +85,13 @@ impl ShardBuilder {
 
     fn build_suffix_array(
         file: &mut File,
-        content_ptr: u64,
-        content_len: u32,
+        content_section: SimpleSection,
     ) -> Result<SimpleSection, Error> {
         let current_position = file.seek(io::SeekFrom::Current(0))?;
 
         // Round up to the nearest block size so we have aligned blocks for our suffix array
         let sa_start = next_multiple_of(current_position, SuffixBlock::SIZE_BYTES as u64);
-        let sa_end = sa_start + content_len as u64 * std::mem::size_of::<u32>() as u64;
+        let sa_end = sa_start + content_section.len * std::mem::size_of::<u32>() as u64;
 
         // Round file length to the next block size and move the cursor to the end of the file
         file.set_len(next_multiple_of(sa_end, SuffixBlock::SIZE_BYTES as u64))?;
@@ -106,12 +99,13 @@ impl ShardBuilder {
 
         // Reopen mmap after extending file
         let mmap = unsafe { MmapMut::map_mut(&*file)? };
-        let content_data = &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
+        let content_data = &mmap[content_section.offset as usize
+            ..content_section.offset as usize + content_section.len as usize];
 
         let sa = unsafe {
             std::slice::from_raw_parts_mut(
                 mmap[sa_start as usize..].as_ptr() as *mut u32,
-                content_len as usize,
+                content_section.len as usize,
             )
         };
 
@@ -127,8 +121,7 @@ impl ShardBuilder {
 
     fn build_header(
         file: &File,
-        content_ptr: u64,
-        content_len: u64,
+        content_section: SimpleSection,
         doc_ends_section: SimpleSection,
         sa_section: SimpleSection,
     ) -> Result<ShardHeader, io::Error> {
@@ -136,10 +129,7 @@ impl ShardBuilder {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
             docs: CompoundSection {
-                data: SimpleSection {
-                    offset: content_ptr,
-                    len: content_len,
-                },
+                data: content_section,
                 offsets: doc_ends_section,
             },
             sa: sa_section,
