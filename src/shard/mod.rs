@@ -67,7 +67,7 @@ impl Shard {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
@@ -107,18 +107,6 @@ impl ShardHeader {
             doc_ends,
             sa,
         })
-    }
-}
-
-impl Default for ShardHeader {
-    fn default() -> Self {
-        ShardHeader {
-            version: Self::VERSION,
-            flags: 0,
-            content: SimpleSection::default(),
-            doc_ends: SimpleSection::default(),
-            sa: SimpleSection::default(),
-        }
     }
 }
 
