@@ -94,37 +94,34 @@ impl ShardBuilder {
         content_ptr: u64,
         content_len: u32,
     ) -> Result<SimpleSection, Error> {
-        let sa_start = {
-            let current_position = file.seek(io::SeekFrom::Current(0))?;
+        let current_position = file.seek(io::SeekFrom::Current(0))?;
 
-            // Round up to the nearest block size so we have aligned blocks for our suffix array
-            let sa_start = next_multiple_of(current_position, SuffixBlock::SIZE_BYTES as u64);
-            let sa_end = sa_start + content_len as u64 * std::mem::size_of::<u32>() as u64;
+        // Round up to the nearest block size so we have aligned blocks for our suffix array
+        let sa_start = next_multiple_of(current_position, SuffixBlock::SIZE_BYTES as u64);
+        let sa_end = sa_start + content_len as u64 * std::mem::size_of::<u32>() as u64;
 
-            // Round file length to the next block size and move the cursor to the end of the file
-            file.set_len(next_multiple_of(sa_end, SuffixBlock::SIZE_BYTES as u64))?;
-            file.seek(io::SeekFrom::End(0))?;
+        // Round file length to the next block size and move the cursor to the end of the file
+        file.set_len(next_multiple_of(sa_end, SuffixBlock::SIZE_BYTES as u64))?;
+        file.seek(io::SeekFrom::End(0))?;
 
-            // Reopen mmap after extending file
-            let mmap = unsafe { MmapMut::map_mut(&*file)? };
-            let content_data =
-                &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
+        // Reopen mmap after extending file
+        let mmap = unsafe { MmapMut::map_mut(&*file)? };
+        let content_data = &mmap[content_ptr as usize..content_ptr as usize + content_len as usize];
 
-            let sa = unsafe {
-                std::slice::from_raw_parts_mut(
-                    mmap[sa_start as usize..].as_ptr() as *mut u32,
-                    content_len as usize,
-                )
-            };
-
-            let mut stypes = table::SuffixTypes::new(sa.len() as u32);
-            let mut bins = table::Bins::new();
-            table::sais(sa, &mut stypes, &mut bins, &CIBytes(content_data));
-            sa_start
+        let sa = unsafe {
+            std::slice::from_raw_parts_mut(
+                mmap[sa_start as usize..].as_ptr() as *mut u32,
+                content_len as usize,
+            )
         };
+
+        let mut stypes = table::SuffixTypes::new(sa.len() as u32);
+        let mut bins = table::Bins::new();
+        table::sais(sa, &mut stypes, &mut bins, &CIBytes(content_data));
+
         Ok(SimpleSection {
             offset: sa_start,
-            len: content_len as u64 * std::mem::size_of::<u32>() as u64,
+            len: sa_end - sa_start,
         })
     }
 
