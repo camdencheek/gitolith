@@ -1,11 +1,10 @@
+use anyhow::Error;
 use derive_more::{Add, AddAssign, Div, From, Into, Mul, Sub};
-use std::fs::File;
-use std::io;
 use std::ops::Range;
-use std::os::unix::prelude::FileExt;
 use std::sync::Arc;
 
-use super::content::ContentIdx;
+use super::docs::ContentIdx;
+use super::file::ShardFile;
 
 #[derive(
     Copy, Div, Mul, AddAssign, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Hash,
@@ -24,44 +23,26 @@ impl From<SuffixBlockID> for u64 {
 }
 
 #[derive(Debug)]
-pub struct SuffixBlock(pub [ContentIdx; Self::SIZE_SUFFIXES]);
+pub struct SuffixBlock(pub Box<[ContentIdx]>);
 
 impl SuffixBlock {
     // 2048 is chosen so SIZE_BYTES is 8192, which is a pretty standard page size.
     pub const SIZE_SUFFIXES: usize = 2048;
     pub const SIZE_BYTES: usize = Self::SIZE_SUFFIXES * std::mem::size_of::<u32>();
-
-    fn new() -> Box<Self> {
-        Box::new(Self([ContentIdx(0); Self::SIZE_SUFFIXES]))
-    }
-
-    fn as_bytes_mut(&mut self) -> &mut [u8] {
-        // TODO guarantee this is actually safe. I _think_ a single-element tuple struct will
-        // always have the same representation as its only element, but I'm not 100% sure.
-        // Maybe #[repr(C)] on ContentIdx would make me feel better.
-        unsafe { std::slice::from_raw_parts_mut(self.0.as_ptr() as *mut u8, Self::SIZE_BYTES) }
-    }
 }
 
 #[derive(Clone)]
 pub struct SuffixArrayStore {
-    file: Arc<File>,
+    file: Arc<ShardFile>,
     // Pointer to the suffix array relative to the start of the file
-    sa_ptr: u64,
     // Length in u32s, not bytes
     // TODO this should not be public
     pub sa_len: u32,
 }
 
 impl SuffixArrayStore {
-    pub fn new(file: Arc<File>, sa_ptr: u64, sa_len: u32) -> Self {
-        assert!(sa_ptr % SuffixBlock::SIZE_BYTES as u64 == 0);
-
-        Self {
-            file,
-            sa_ptr,
-            sa_len,
-        }
+    pub fn new(file: Arc<ShardFile>, sa_len: u32) -> Self {
+        Self { file, sa_len }
     }
 
     pub fn max_block_id(&self) -> SuffixBlockID {
@@ -92,11 +73,7 @@ impl SuffixArrayStore {
         )
     }
 
-    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Box<SuffixBlock>, io::Error> {
-        // TODO assert that the block ID is in range
-        let abs_start = self.sa_ptr + block_id.0 as u64 * SuffixBlock::SIZE_BYTES as u64;
-        let mut block = SuffixBlock::new();
-        (*self.file).read_exact_at(block.as_bytes_mut(), abs_start)?;
-        Ok(block)
+    pub fn read_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, Error> {
+        self.file.read_suffix_block(block_id)
     }
 }

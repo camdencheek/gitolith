@@ -145,12 +145,12 @@ impl ShardBuilder {
                 },
                 offsets: SimpleSection {
                     offset: doc_ends_ptr,
-                    len: doc_ends_len,
+                    len: doc_ends_len * std::mem::size_of::<u32>() as u64,
                 },
             },
             sa: SimpleSection {
                 offset: sa_ptr,
-                len: sa_len,
+                len: sa_len * std::mem::size_of::<u32>() as u64,
             },
         };
         file.write_all_at(&header.to_bytes(), 0)?;

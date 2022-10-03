@@ -57,7 +57,7 @@ impl TransparentKey for CacheKey {
 #[derive(Clone, Debug)]
 pub enum CacheValue {
     DocEnds(Arc<DocEnds>),
-    DocContent(Arc<Vec<u8>>),
+    DocContent(Arc<[u8]>),
     SuffixBlock(Arc<SuffixBlock>),
 }
 

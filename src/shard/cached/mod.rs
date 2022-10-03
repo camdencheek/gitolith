@@ -6,10 +6,10 @@ use std::{
 use crate::{
     cache::{Cache, CacheKey, CacheValue},
     search::regex::ConcatLiteralSet,
+    shard::docs::ContentIdx,
 };
 
 use super::{
-    content::ContentIdx,
     docs::{DocEnds, DocID, DocStore},
     suffix::{SuffixArrayStore, SuffixBlock, SuffixBlockID, SuffixIdx},
     Shard, ShardID,
@@ -61,16 +61,17 @@ impl CachedDocs {
         self.docs.doc_ids()
     }
 
-    pub fn get_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Arc<Vec<u8>> {
+    pub fn get_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Arc<[u8]> {
         let key = CacheKey::DocContent(self.shard_id, doc_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::DocContent(Arc::new(
+            let v = CacheValue::DocContent(
                 self.docs
                     .read_content(doc_id, doc_ends)
-                    .expect("failed to read doc content"),
-            ));
+                    .expect("failed to read doc content")
+                    .into(),
+            );
             self.cache.insert(key, v.clone(), 0);
             v
         };
@@ -291,7 +292,7 @@ impl<'a, 'b> ContiguousContentIterator<'a, 'b> {
 }
 
 impl<'a, 'b> Iterator for ContiguousContentIterator<'a, 'b> {
-    type Item = (Arc<Vec<u8>>, Range<usize>);
+    type Item = (Arc<[u8]>, Range<usize>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.range.end - self.range.start == ContentIdx(0) {

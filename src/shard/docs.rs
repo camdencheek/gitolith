@@ -1,9 +1,7 @@
-use super::content::{ContentIdx, ContentStore};
+use super::file::ShardFile;
+use anyhow::Error;
 use derive_more::{Add, AddAssign, From, Into, Mul, Sub};
-use std::fs::File;
-use std::io;
 use std::ops::Range;
-use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 
 #[derive(
@@ -38,54 +36,47 @@ impl DocID {
     }
 }
 
+#[derive(Copy, Clone, Add, Sub, PartialEq, From, Into, PartialOrd, Debug, Eq, Ord, Hash)]
+pub struct ContentIdx(pub u32);
+
+impl From<ContentIdx> for usize {
+    fn from(ci: ContentIdx) -> Self {
+        u32::from(ci) as usize
+    }
+}
+
+impl From<ContentIdx> for u64 {
+    fn from(ci: ContentIdx) -> Self {
+        u32::from(ci) as u64
+    }
+}
+
 #[derive(Clone)]
 pub struct DocStore {
-    file: Arc<File>,
-    content: ContentStore,
-    doc_ends_ptr: u64,
-    doc_ends_len: u32,
+    file: Arc<ShardFile>,
 }
 
 impl DocStore {
-    pub fn new(
-        file: Arc<File>,
-        content: ContentStore,
-        doc_ends_ptr: u64,
-        doc_ends_len: u32,
-    ) -> Self {
-        Self {
-            file,
-            content,
-            doc_ends_ptr,
-            doc_ends_len,
-        }
+    pub fn new(file: Arc<ShardFile>) -> Self {
+        Self { file }
     }
 
     pub fn doc_ids(&self) -> impl Iterator<Item = DocID> {
-        (0..self.doc_ends_len).into_iter().map(DocID)
+        (0..self.num_docs()).into_iter().map(DocID)
     }
 
-    pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Vec<u8>, io::Error> {
-        let range = doc_ends.content_range(doc_id);
-        self.content.read(range)
+    pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Box<[u8]>, Error> {
+        self.file.read_doc(doc_id, doc_ends)
     }
 
     // Returns the list of offsets (relative to the beginning of the content block)
     // that contain the zero-byte separators at the end of each document.
-    pub fn read_doc_ends(&self) -> Result<DocEnds, io::Error> {
-        let doc_ends = vec![ContentIdx(0u32); self.doc_ends_len as usize];
-        let doc_ends_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                doc_ends.as_ptr() as *mut u8,
-                doc_ends.len() * std::mem::size_of::<u32>(),
-            )
-        };
-        (*self.file).read_exact_at(doc_ends_bytes, self.doc_ends_ptr)?;
-        Ok(DocEnds(doc_ends))
+    pub fn read_doc_ends(&self) -> Result<DocEnds, Error> {
+        self.file.read_doc_ends()
     }
 
     pub fn num_docs(&self) -> u32 {
-        self.doc_ends_len
+        (self.file.header.docs.offsets.len / std::mem::size_of::<u32>() as u64) as u32
     }
 
     pub fn max_doc_id(&self) -> DocID {
@@ -93,6 +84,7 @@ impl DocStore {
     }
 }
 
+// TODO this can be slightly more efficient as a boxed slice
 #[derive(Debug)]
 pub struct DocEnds(Vec<ContentIdx>);
 

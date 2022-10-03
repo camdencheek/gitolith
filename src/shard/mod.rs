@@ -1,15 +1,13 @@
 pub mod builder;
 pub mod cached;
-pub mod content;
 pub mod docs;
 pub mod file;
 pub mod suffix;
 
 use bytes::Buf;
-use content::ContentStore;
 use file::ShardHeader;
 
-use self::file::ReadWriteStream;
+use self::file::{ReadWriteStream, ShardFile};
 use anyhow::Error;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -48,20 +46,14 @@ impl Shard {
         file.read_at(&mut buf[..], 0)?;
         let header = ShardHeader::read_from(&mut buf[..].reader())?;
 
-        let file = Arc::new(file);
-        let content = ContentStore::new(
-            Arc::clone(&file),
-            header.docs.data.offset,
-            header.docs.data.len as u32,
-        );
-        let docs = DocStore::new(
-            Arc::clone(&file),
-            content.clone(),
-            header.docs.offsets.offset,
-            header.docs.offsets.len as u32,
-        );
-        let suffixes =
-            SuffixArrayStore::new(Arc::clone(&file), header.sa.offset, header.sa.len as u32);
+        let file = Arc::new(ShardFile {
+            file,
+            header: header.clone(),
+        });
+        let docs = DocStore::new(Arc::clone(&file));
+        let sa_len = (header.sa.len / std::mem::size_of::<u32>() as u64) as u32;
+        assert!(sa_len == header.docs.data.len as u32);
+        let suffixes = SuffixArrayStore::new(Arc::clone(&file), sa_len);
 
         Ok(Self {
             header,

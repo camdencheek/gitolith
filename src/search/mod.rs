@@ -11,8 +11,7 @@ use ::regex::bytes::Regex;
 use crate::shard::cached::{
     CachedDocs, CachedShard, CachedSuffixes, SuffixBlockIterator, SuffixRangeIterator,
 };
-use crate::shard::content::ContentIdx;
-use crate::shard::docs::DocIDIterator;
+use crate::shard::docs::{ContentIdx, DocIDIterator};
 use crate::shard::docs::{DocEnds, DocID};
 use crate::shard::suffix::{SuffixBlock, SuffixBlockID, SuffixIdx};
 
@@ -28,7 +27,7 @@ use optimize::optimize_extracted;
 pub struct DocMatch {
     pub id: DocID,
     pub matches: Vec<Range<u32>>,
-    pub content: Arc<Vec<u8>>,
+    pub content: Arc<[u8]>,
 }
 
 pub fn search_regex<'a>(

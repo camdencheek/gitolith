@@ -1,14 +1,66 @@
 use std::{
     fs::File,
     io::{Read, Write},
+    os::unix::prelude::FileExt,
 };
 
 use anyhow::Error;
 use bytes::BufMut;
 
-struct ShardFile {
-    file: File,
-    header: ShardHeader,
+use crate::shard::docs::ContentIdx;
+
+use super::{
+    docs::{DocEnds, DocID},
+    suffix::{SuffixBlock, SuffixBlockID},
+};
+
+pub struct ShardFile {
+    pub file: File,
+    pub header: ShardHeader,
+}
+
+impl ShardFile {
+    pub fn read_doc_ends(&self) -> Result<DocEnds, Error> {
+        let mut buf = vec![0u8; self.header.docs.offsets.len as usize];
+        self.file
+            .read_exact_at(&mut buf, self.header.docs.offsets.offset)?;
+
+        let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
+        assert!(chunks.remainder().len() == 0);
+
+        Ok(DocEnds::new(
+            chunks
+                .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+                .map(ContentIdx::from)
+                .collect(),
+        ))
+    }
+
+    pub fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Box<[u8]>, Error> {
+        let range = doc_ends.content_range(doc_id);
+        let doc_start = self.header.docs.data.offset + u64::from(range.start);
+        let doc_len = usize::from(range.end) - usize::from(range.start);
+        let mut buf = vec![0u8; doc_len];
+        self.file.read_exact_at(&mut buf, doc_start)?;
+        Ok(buf.into_boxed_slice())
+    }
+
+    pub fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<SuffixBlock, Error> {
+        let block_start =
+            self.header.sa.offset + u64::from(block_id) * SuffixBlock::SIZE_BYTES as u64;
+        let mut buf = vec![0u8; SuffixBlock::SIZE_BYTES];
+        self.file.read_exact_at(&mut buf, block_start)?;
+
+        let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
+        assert!(chunks.remainder().len() == 0);
+
+        Ok(SuffixBlock(
+            chunks
+                .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+                .map(ContentIdx::from)
+                .collect(),
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,20 +138,6 @@ impl ReadWriteStream for SimpleSection {
 pub struct CompoundSection {
     pub data: SimpleSection,
     pub offsets: SimpleSection,
-}
-
-impl CompoundSection {
-    fn offset(&self) -> u64 {
-        self.data.offset
-    }
-
-    fn len(&self) -> u64 {
-        self.data.len + self.offsets.len
-    }
-
-    fn end(&self) -> u64 {
-        self.offset() + self.len()
-    }
 }
 
 impl ReadWriteStream for CompoundSection {
