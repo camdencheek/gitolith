@@ -485,7 +485,7 @@ mod test {
         .iter()
         .enumerate()
         {
-            b.add_doc(format!("document {}", id), doc.as_bytes())
+            b.add_doc(format!("document {}", id), doc.as_bytes().to_vec())
                 .unwrap();
         }
         let shard_file = b.build().unwrap();

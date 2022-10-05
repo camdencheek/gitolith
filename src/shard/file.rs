@@ -10,6 +10,7 @@ use anyhow::Error;
 use super::{
     docs::{ContentIdx, DocEnds, DocID},
     suffix::{SuffixBlock, SuffixBlockID},
+    Trigram,
 };
 
 pub type ShardStore = Arc<dyn ShardBackend + Send + Sync>;
@@ -19,6 +20,7 @@ pub trait ShardBackend {
     fn get_doc_ends(&self) -> Result<Arc<DocEnds>, Error>;
     fn get_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error>;
     fn get_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error>;
+    fn get_trigrams(&self) -> Result<Arc<[(Trigram, u32)]>, Error>;
 }
 
 pub struct ShardFile {
@@ -86,6 +88,26 @@ impl ShardBackend for ShardFile {
         }
         Ok(block)
     }
+
+    fn get_trigrams(&self) -> Result<Arc<[(Trigram, u32)]>, Error> {
+        assert!(self.header().trigrams.len % 7 == 0);
+
+        let mut buf = vec![0u8; self.header().trigrams.len as usize];
+        self.file
+            .read_exact_at(&mut buf, self.header().trigrams.offset)?;
+
+        Ok(buf
+            .chunks_exact(7)
+            .map(|chunk| {
+                let mut trigram = [0u8; 3];
+                trigram.copy_from_slice(&chunk[..3]);
+                let mut count_bytes = [0u8; 4];
+                count_bytes.copy_from_slice(&chunk[3..]);
+                (trigram, u32::from_le_bytes(count_bytes))
+            })
+            .collect::<Vec<_>>()
+            .into())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,6 +115,7 @@ pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
     pub content: CompoundSection,
+    pub trigrams: SimpleSection,
     pub sa: SimpleSection,
 }
 
@@ -115,13 +138,15 @@ impl ReadWriteStream for ShardHeader {
     {
         let version = u32::read_from(r)?;
         let flags = u32::read_from(r)?;
-        let docs = CompoundSection::read_from(r)?;
+        let content = CompoundSection::read_from(r)?;
+        let trigrams = SimpleSection::read_from(r)?;
         let sa = SimpleSection::read_from(r)?;
 
         Ok(Self {
             version,
             flags,
-            content: docs,
+            content,
+            trigrams,
             sa,
         })
     }
@@ -131,6 +156,7 @@ impl ReadWriteStream for ShardHeader {
         n += self.version.write_to(w)?;
         n += self.flags.write_to(w)?;
         n += self.content.write_to(w)?;
+        n += self.trigrams.write_to(w)?;
         n += self.sa.write_to(w)?;
         Ok(n)
     }

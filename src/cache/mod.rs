@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::shard::docs::{DocEnds, DocID};
 use crate::shard::suffix::{SuffixBlock, SuffixBlockID};
 use crate::shard::ShardID;
+use crate::shard::Trigram;
 
 use stretto::{
     Cache as StrettoCache, Coster, DefaultCacheCallback, DefaultUpdateValidator, TransparentKey,
@@ -24,6 +25,7 @@ pub enum CacheKey {
     DocEnds(ShardID),
     DocContent(ShardID, DocID),
     SuffixBlock(ShardID, SuffixBlockID),
+    Trigrams(ShardID),
 }
 
 // Implemented to satisfy TransparentKeyBuilder. Do not actually use this
@@ -50,6 +52,7 @@ impl TransparentKey for CacheKey {
             SuffixBlock(shard_id, block_id) => {
                 (3 << 60) + (u64::from(*shard_id) << 32) + u64::from(*block_id)
             }
+            Trigrams(shard_id) => (4 << 60) + (u64::from(*shard_id) << 32),
         }
     }
 }
@@ -59,6 +62,7 @@ pub enum CacheValue {
     DocEnds(Arc<DocEnds>),
     DocContent(Arc<[u8]>),
     SuffixBlock(Arc<SuffixBlock>),
+    Trigrams(Arc<[(Trigram, u32)]>),
 }
 
 impl CacheValue {
@@ -67,6 +71,9 @@ impl CacheValue {
             CacheValue::DocEnds(e) => e.doc_count() as i64,
             CacheValue::DocContent(c) => c.len() as i64,
             CacheValue::SuffixBlock(_) => SuffixBlock::SIZE_BYTES as i64,
+            CacheValue::Trigrams(t) => {
+                std::mem::size_of::<(Trigram, u32)>() as i64 * t.len() as i64
+            }
         }
     }
 }

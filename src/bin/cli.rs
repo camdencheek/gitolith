@@ -8,7 +8,7 @@ use gitserver3::shard::file::{ShardFile, ShardStore};
 use gitserver3::shard::suffix::{SuffixArrayStore, SuffixBlockID, SuffixIdx};
 use regex::bytes::Regex;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -189,13 +189,16 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
 
     let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
     for entry in documents {
-        let f = File::open(entry.path())?;
+        let mut f = File::open(entry.path())?;
         let l = f.metadata()?.len();
         if l > (2 << 20) {
             println!("skipping file {:?} with size {}", entry.path(), l);
             continue;
         }
-        builder.add_doc(entry.path().to_string_lossy().into(), f)?;
+
+        let mut v = Vec::new();
+        f.read_to_end(&mut v)?;
+        builder.add_doc(entry.path().to_string_lossy().into(), v)?;
     }
     builder.build()?;
     Ok(())
@@ -203,7 +206,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
 
 fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Error> {
     let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
-    builder.add_doc("sample file name".into(), s.as_bytes())?;
+    builder.add_doc("sample file name".into(), s.as_bytes().to_vec())?;
     builder.build()?;
     Ok(())
 }

@@ -11,7 +11,7 @@ use super::{
     docs::{DocEnds, DocID},
     file::{ShardBackend, ShardFile, ShardHeader},
     suffix::SuffixBlockID,
-    ShardID,
+    ShardID, Trigram,
 };
 
 pub struct CachedShardFile {
@@ -79,6 +79,22 @@ impl ShardBackend for CachedShardFile {
 
         match value {
             CacheValue::SuffixBlock(b) => Ok(b),
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_trigrams(&self) -> Result<Arc<[(Trigram, u32)]>, Error> {
+        let key = CacheKey::Trigrams(self.shard_id);
+        let value = if let Some(v) = self.cache.get(&key) {
+            v.value().clone()
+        } else {
+            let v = CacheValue::Trigrams(self.file.get_trigrams()?);
+            self.cache.insert(key, v.clone(), 0);
+            v
+        };
+
+        match value {
+            CacheValue::Trigrams(b) => Ok(b),
             _ => unreachable!(),
         }
     }

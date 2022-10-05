@@ -3,7 +3,6 @@ pub mod cached_file;
 pub mod docs;
 pub mod file;
 pub mod suffix;
-
 use crate::cache;
 
 use self::{
@@ -54,3 +53,5 @@ impl Shard {
         SuffixArrayStore::new(Arc::clone(&self.file))
     }
 }
+
+pub type Trigram = [u8; 3];

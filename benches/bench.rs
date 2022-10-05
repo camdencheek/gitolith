@@ -1,5 +1,6 @@
 use std::{
     fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -35,12 +36,14 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
 
     let mut builder = ShardBuilder::new(&Path::new(&output_shard))?;
     for entry in documents {
-        let f = File::open(entry.path())?;
+        let mut f = File::open(entry.path())?;
         let l = f.metadata()?.len();
         if l > (2 << 20) {
             continue;
         }
-        builder.add_doc(entry.path().to_string_lossy().into(), f)?;
+        let mut v = Vec::new();
+        f.read_to_end(&mut v)?;
+        builder.add_doc(entry.path().to_string_lossy().into(), v)?;
     }
     builder.build()?;
     Ok(())

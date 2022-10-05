@@ -4,6 +4,7 @@ use super::suffix::SuffixBlock;
 use crate::strcmp::AsciiLowerIter;
 use anyhow::Error;
 use memmap2::MmapMut;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::FileExt;
@@ -39,23 +40,24 @@ impl ShardBuilder {
     }
 
     // Adds a doc to the index and returns its ID
-    pub fn add_doc<T: Read>(&mut self, name: String, mut content: T) -> Result<DocID, Error> {
+    pub fn add_doc(&mut self, name: String, mut content: Vec<u8>) -> Result<DocID, Error> {
         // Copy the document into the index
-        let content_len = io::copy(&mut content, &mut self.file)?;
+        self.file.write_all(&content)?;
         self.file_names.push(name);
 
         // Track the offsets of the exclusive end offset of each document in the corpus
         match self.content_ends.as_slice() {
-            [.., last] => self.content_ends.push(last + content_len as u32),
-            [] => self.content_ends.push(content_len as u32),
+            [.., last] => self.content_ends.push(last + content.len() as u32),
+            [] => self.content_ends.push(content.len() as u32),
         };
         Ok(DocID(self.content_ends.len() as u32 - 1))
     }
 
     pub fn build(mut self) -> Result<ShardFile, Error> {
         let content_section = self.build_content()?;
+        let trigram_section = self.build_trigram_offsets(content_section.data.clone())?;
         let sa_section = Self::build_suffix_array(&mut self.file, content_section.data.clone())?;
-        Self::build_header(&self.file, content_section, sa_section)?;
+        Self::build_header(&self.file, content_section, trigram_section, sa_section)?;
         ShardFile::from_file(self.file)
     }
 
@@ -81,6 +83,60 @@ impl ShardBuilder {
         Ok(CompoundSection {
             data: content_section,
             offsets: content_ends,
+        })
+    }
+
+    fn build_trigram_offsets(
+        &mut self,
+        content_section: SimpleSection,
+    ) -> Result<SimpleSection, Error> {
+        let start = self.file.seek(io::SeekFrom::Current(0))?;
+
+        let mmap = unsafe { MmapMut::map_mut(&self.file)? };
+        let content_data = &mmap[content_section.offset as usize
+            ..content_section.offset as usize + content_section.len as usize];
+
+        type Trigram = [u8; 3];
+        let mut trigram_counts = BTreeMap::<Trigram, u32>::new();
+        let mut inc = |mut t: Trigram| {
+            t.iter_mut().for_each(|b| *b = b.to_ascii_lowercase());
+            match trigram_counts.get_mut(&t) {
+                Some(n) => *n += 1,
+                None => {
+                    trigram_counts.insert(t, 1);
+                }
+            }
+        };
+
+        let mut trigram = [0u8; 3];
+        for trigram_slice in content_data.windows(3) {
+            trigram.copy_from_slice(&trigram_slice);
+            inc(trigram);
+        }
+        match content_data {
+            [.., a, b] => {
+                inc([*a, *b, 0]);
+                inc([*b, 0, 0]);
+            }
+            [a] => {
+                inc([*a, 0, 0]);
+            }
+            [] => {}
+        }
+
+        let mut buf = BufWriter::new(&self.file);
+        let mut total_count = 0;
+        let mut n = 0;
+        for (trigram, count) in trigram_counts {
+            total_count += count;
+            n += buf.write(&trigram)?;
+            n += buf.write(&total_count.to_le_bytes())?;
+        }
+        buf.flush()?;
+
+        Ok(SimpleSection {
+            offset: start,
+            len: n as u64,
         })
     }
 
@@ -123,12 +179,14 @@ impl ShardBuilder {
     fn build_header(
         file: &File,
         content_section: CompoundSection,
+        trigram_section: SimpleSection,
         sa_section: SimpleSection,
     ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
             content: content_section,
+            trigrams: trigram_section,
             sa: sa_section,
         };
         file.write_all_at(&header.to_bytes(), 0)?;

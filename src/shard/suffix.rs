@@ -107,6 +107,20 @@ impl SuffixArrayStore {
     where
         T: AsRef<[u8]>,
     {
+        let (lower, upper) = match prefix.as_ref() {
+            [a, b, c, ..] => {
+                let trigrams = self.store.get_trigrams().unwrap();
+                match trigrams.binary_search_by_key(&&[*a, *b, *c], |(trigram, _)| trigram) {
+                    Ok(i) => (
+                        Some(SuffixIdx(trigrams.get(i - 1).map(|(_, n)| *n).unwrap_or(0))),
+                        Some(SuffixIdx(trigrams[i].1)),
+                    ),
+                    _ => return SuffixIdx(0),
+                }
+            }
+            _ => (None, None),
+        };
+
         use std::cmp::Ordering::*;
         let doc_ends = self.store.get_doc_ends().unwrap();
         let docs = DocStore::new(Arc::clone(&self.store));
@@ -132,12 +146,17 @@ impl SuffixArrayStore {
             include_equal
         };
 
-        self.partition_by_content_idx(pred)
+        self.partition_by_content_idx(pred, lower, upper)
     }
 
-    fn partition_by_content_idx<T>(&self, mut pred: T) -> SuffixIdx
+    fn partition_by_content_idx<P>(
+        &self,
+        mut pred: P,
+        lower: Option<SuffixIdx>,
+        upper: Option<SuffixIdx>,
+    ) -> SuffixIdx
     where
-        T: FnMut(ContentIdx) -> bool,
+        P: FnMut(ContentIdx) -> bool,
     {
         // Hold on to the last block we fetched because we will hit the same
         // block many times in a row at the end of the lookup. Hitting the cache
@@ -166,14 +185,20 @@ impl SuffixArrayStore {
             pred(content_idx)
         };
 
-        self.partition_by_suffix_idx(suffix_pred)
+        self.partition_by_suffix_idx(suffix_pred, lower, upper)
     }
 
-    fn partition_by_suffix_idx<T>(&self, mut pred: T) -> SuffixIdx
+    fn partition_by_suffix_idx<P>(
+        &self,
+        mut pred: P,
+        lower: Option<SuffixIdx>,
+        upper: Option<SuffixIdx>,
+    ) -> SuffixIdx
     where
-        T: FnMut(SuffixIdx) -> bool,
+        P: FnMut(SuffixIdx) -> bool,
     {
-        let (mut min, mut max) = (SuffixIdx(0), SuffixIdx(self.sa_len()));
+        let mut min = lower.unwrap_or(SuffixIdx(0));
+        let mut max = upper.unwrap_or(SuffixIdx(self.sa_len()));
 
         while min < max {
             let mid = SuffixIdx((u32::from(max) - u32::from(min)) / 2 + u32::from(min));
