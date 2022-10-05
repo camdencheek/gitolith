@@ -474,15 +474,19 @@ mod test {
 
     fn build_shard() -> Shard {
         let mut b = ShardBuilder::new(&Path::new("/tmp/testshard1")).unwrap();
-        for doc in &mut [
+        for (id, doc) in &mut [
             "document1".to_string(),
             "document2".to_string(),
             "contains needle".to_string(),
             "contains needle and another needle".to_string(),
             "contains case sensitive nEeDlE".to_string(),
             "line1\nline2".to_string(),
-        ] {
-            b.add_doc(doc.as_bytes()).unwrap();
+        ]
+        .iter()
+        .enumerate()
+        {
+            b.add_doc(format!("document {}", id), doc.as_bytes())
+                .unwrap();
         }
         let shard_file = b.build().unwrap();
         let c = cache::new_cache(64 * 1024 * 1024);

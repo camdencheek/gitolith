@@ -40,7 +40,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
         if l > (2 << 20) {
             continue;
         }
-        builder.add_doc(f)?;
+        builder.add_doc(entry.path().to_string_lossy().into(), f)?;
     }
     builder.build()?;
     Ok(())

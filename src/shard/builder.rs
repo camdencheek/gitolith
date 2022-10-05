@@ -15,7 +15,8 @@ pub struct ShardBuilder {
     file: File,
     // the locations of the zero-bytes following each document,
     // relative to the start of the content.
-    doc_ends: Vec<u32>,
+    content_ends: Vec<u32>,
+    file_names: Vec<String>,
 }
 
 impl ShardBuilder {
@@ -32,51 +33,54 @@ impl ShardBuilder {
 
         Ok(Self {
             file,
-            doc_ends: Vec::new(),
+            content_ends: Vec::new(),
+            file_names: Vec::new(),
         })
     }
 
     // Adds a doc to the index and returns its ID
-    pub fn add_doc<T: Read>(&mut self, mut doc: T) -> Result<DocID, Error> {
+    pub fn add_doc<T: Read>(&mut self, name: String, mut content: T) -> Result<DocID, Error> {
         // Copy the document into the index
-        let doc_len = io::copy(&mut doc, &mut self.file)?;
+        let content_len = io::copy(&mut content, &mut self.file)?;
+        self.file_names.push(name);
 
         // Track the offsets of the exclusive end offset of each document in the corpus
-        match self.doc_ends.as_slice() {
-            [.., last] => self.doc_ends.push(last + doc_len as u32),
-            [] => self.doc_ends.push(doc_len as u32),
+        match self.content_ends.as_slice() {
+            [.., last] => self.content_ends.push(last + content_len as u32),
+            [] => self.content_ends.push(content_len as u32),
         };
-        Ok(DocID(self.doc_ends.len() as u32 - 1))
+        Ok(DocID(self.content_ends.len() as u32 - 1))
     }
 
     pub fn build(mut self) -> Result<ShardFile, Error> {
-        let content_section = Self::build_content(&self.doc_ends);
-        let doc_ends_section = Self::build_docs(&mut self.file, &self.doc_ends)?;
-        let sa_section = Self::build_suffix_array(&mut self.file, content_section.clone())?;
-        Self::build_header(&self.file, content_section, doc_ends_section, sa_section)?;
+        let content_section = self.build_content()?;
+        let sa_section = Self::build_suffix_array(&mut self.file, content_section.data.clone())?;
+        Self::build_header(&self.file, content_section, sa_section)?;
         ShardFile::from_file(self.file)
     }
 
-    fn build_content(doc_ends: &[u32]) -> SimpleSection {
+    fn build_content(&mut self) -> Result<CompoundSection, Error> {
         // The data on disk is build incrementally during add_doc,
         // so just return the content range here
-        SimpleSection {
+        let content_section = SimpleSection {
             offset: ShardHeader::HEADER_SIZE as u64,
-            len: *doc_ends.last().unwrap_or(&0) as u64,
-        }
-    }
+            len: *self.content_ends.last().unwrap_or(&0) as u64,
+        };
 
-    fn build_docs(file: &mut File, doc_ends: &Vec<u32>) -> Result<SimpleSection, io::Error> {
-        // Write all the doc ends to the buffer
-        let start = file.seek(io::SeekFrom::Current(0))?;
-        let mut buf = BufWriter::new(file);
-        for doc_end in doc_ends.iter() {
+        let start = self.file.seek(io::SeekFrom::Current(0))?;
+        let mut buf = BufWriter::new(&self.file);
+        for doc_end in self.content_ends.iter() {
             buf.write_all(&doc_end.to_le_bytes())?;
         }
         buf.flush()?;
-        Ok(SimpleSection {
+        let content_ends = SimpleSection {
             offset: start,
-            len: doc_ends.len() as u64 * std::mem::size_of::<u32>() as u64,
+            len: self.content_ends.len() as u64 * std::mem::size_of::<u32>() as u64,
+        };
+
+        Ok(CompoundSection {
+            data: content_section,
+            offsets: content_ends,
         })
     }
 
@@ -118,17 +122,13 @@ impl ShardBuilder {
 
     fn build_header(
         file: &File,
-        content_section: SimpleSection,
-        doc_ends_section: SimpleSection,
+        content_section: CompoundSection,
         sa_section: SimpleSection,
     ) -> Result<ShardHeader, io::Error> {
         let header = ShardHeader {
             version: ShardHeader::VERSION,
             flags: ShardHeader::FLAG_COMPLETE,
-            docs: CompoundSection {
-                data: content_section,
-                offsets: doc_ends_section,
-            },
+            content: content_section,
             sa: sa_section,
         };
         file.write_all_at(&header.to_bytes(), 0)?;

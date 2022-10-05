@@ -195,7 +195,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
             println!("skipping file {:?} with size {}", entry.path(), l);
             continue;
         }
-        builder.add_doc(f)?;
+        builder.add_doc(entry.path().to_string_lossy().into(), f)?;
     }
     builder.build()?;
     Ok(())
@@ -203,7 +203,7 @@ fn build_directory_index(output_shard: PathBuf, dir: PathBuf) -> Result<(), Erro
 
 fn build_string_index(output_shard: PathBuf, s: String) -> Result<(), Error> {
     let mut builder = ShardBuilder::new(Path::new(&output_shard))?;
-    builder.add_doc(s.as_bytes())?;
+    builder.add_doc("sample file name".into(), s.as_bytes())?;
     builder.build()?;
     Ok(())
 }

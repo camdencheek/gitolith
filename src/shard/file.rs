@@ -46,9 +46,9 @@ impl ShardBackend for ShardFile {
     }
 
     fn get_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
-        let mut buf = vec![0u8; self.header.docs.offsets.len as usize];
+        let mut buf = vec![0u8; self.header.content.offsets.len as usize];
         self.file
-            .read_exact_at(&mut buf, self.header.docs.offsets.offset)?;
+            .read_exact_at(&mut buf, self.header.content.offsets.offset)?;
 
         let chunks = buf.chunks_exact(std::mem::size_of::<u32>());
         assert!(chunks.remainder().is_empty());
@@ -63,7 +63,7 @@ impl ShardBackend for ShardFile {
 
     fn get_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
         let range = doc_ends.content_range(doc_id);
-        let doc_start = self.header.docs.data.offset + u64::from(range.start);
+        let doc_start = self.header.content.data.offset + u64::from(range.start);
         let doc_len = usize::from(range.end) - usize::from(range.start);
         let mut buf = vec![0u8; doc_len];
         self.file.read_exact_at(&mut buf, doc_start)?;
@@ -92,7 +92,7 @@ impl ShardBackend for ShardFile {
 pub struct ShardHeader {
     pub version: u32,
     pub flags: u32,
-    pub docs: CompoundSection,
+    pub content: CompoundSection,
     pub sa: SimpleSection,
 }
 
@@ -121,7 +121,7 @@ impl ReadWriteStream for ShardHeader {
         Ok(Self {
             version,
             flags,
-            docs,
+            content: docs,
             sa,
         })
     }
@@ -130,7 +130,7 @@ impl ReadWriteStream for ShardHeader {
         let mut n = 0;
         n += self.version.write_to(w)?;
         n += self.flags.write_to(w)?;
-        n += self.docs.write_to(w)?;
+        n += self.content.write_to(w)?;
         n += self.sa.write_to(w)?;
         Ok(n)
     }

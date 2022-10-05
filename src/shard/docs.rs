@@ -78,7 +78,7 @@ impl DocStore {
     }
 
     pub fn num_docs(&self) -> u32 {
-        (self.store.header().docs.offsets.len / std::mem::size_of::<u32>() as u64) as u32
+        (self.store.header().content.offsets.len / std::mem::size_of::<u32>() as u64) as u32
     }
 
     pub fn max_doc_id(&self) -> DocID {

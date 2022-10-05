@@ -51,10 +51,10 @@ impl SuffixArrayStore {
 
     fn sa_len(&self) -> u32 {
         debug_assert!(
-            self.store.header().docs.data.len * std::mem::size_of::<u32>() as u64
+            self.store.header().content.data.len * std::mem::size_of::<u32>() as u64
                 == self.store.header().sa.len
         );
-        self.store.header().docs.data.len as u32
+        self.store.header().content.data.len as u32
     }
 
     pub fn max_block_id(&self) -> SuffixBlockID {
