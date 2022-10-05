@@ -68,13 +68,13 @@ impl DocStore {
     }
 
     pub fn read_content(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
-        self.store.read_doc(doc_id, doc_ends)
+        self.store.get_doc(doc_id, doc_ends)
     }
 
     // Returns the list of offsets (relative to the beginning of the content block)
     // that contain the zero-byte separators at the end of each document.
     pub fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
-        self.store.read_doc_ends()
+        self.store.get_doc_ends()
     }
 
     pub fn num_docs(&self) -> u32 {

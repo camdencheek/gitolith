@@ -35,12 +35,12 @@ impl ShardBackend for CachedShardFile {
         &self.file.header
     }
 
-    fn read_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
+    fn get_doc_ends(&self) -> Result<Arc<DocEnds>, Error> {
         let key = CacheKey::DocEnds(self.shard_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::DocEnds(self.file.read_doc_ends()?);
+            let v = CacheValue::DocEnds(self.file.get_doc_ends()?);
             self.cache.insert(key, v.clone(), 0);
             v
         };
@@ -51,12 +51,12 @@ impl ShardBackend for CachedShardFile {
         }
     }
 
-    fn read_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
+    fn get_doc(&self, doc_id: DocID, doc_ends: &DocEnds) -> Result<Arc<[u8]>, Error> {
         let key = CacheKey::DocContent(self.shard_id, doc_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::DocContent(self.file.read_doc(doc_id, doc_ends)?);
+            let v = CacheValue::DocContent(self.file.get_doc(doc_id, doc_ends)?);
             self.cache.insert(key, v.clone(), 0);
             v
         };
@@ -67,12 +67,12 @@ impl ShardBackend for CachedShardFile {
         }
     }
 
-    fn read_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
+    fn get_suffix_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
         let key = CacheKey::SuffixBlock(self.shard_id, block_id);
         let value = if let Some(v) = self.cache.get(&key) {
             v.value().clone()
         } else {
-            let v = CacheValue::SuffixBlock(self.file.read_suffix_block(block_id)?);
+            let v = CacheValue::SuffixBlock(self.file.get_suffix_block(block_id)?);
             self.cache.insert(key, v.clone(), 0);
             v
         };

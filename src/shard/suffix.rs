@@ -90,7 +90,7 @@ impl SuffixArrayStore {
     }
 
     pub fn read_block(&self, block_id: SuffixBlockID) -> Result<Arc<SuffixBlock>, Error> {
-        self.store.read_suffix_block(block_id)
+        self.store.get_suffix_block(block_id)
     }
 
     pub fn lookup_literal_range<T>(&self, prefix_range: RangeInclusive<T>) -> Range<SuffixIdx>
@@ -108,7 +108,7 @@ impl SuffixArrayStore {
         T: AsRef<[u8]>,
     {
         use std::cmp::Ordering::*;
-        let doc_ends = self.store.read_doc_ends().unwrap();
+        let doc_ends = self.store.get_doc_ends().unwrap();
         let docs = DocStore::new(Arc::clone(&self.store));
 
         let pred = |content_idx| {
