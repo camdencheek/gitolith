@@ -1,4 +1,4 @@
-use super::regex::{ConcatLiteralSet, ExtractedRegexLiterals};
+use super::regex::{ConcatLiteralSet, ExtractedRegexLiterals, LiteralSet};
 
 #[derive(Debug)]
 pub enum OptimizedLiterals {
@@ -18,23 +18,9 @@ pub fn optimize_extracted(extracted: ExtractedRegexLiterals) -> OptimizedLiteral
 }
 
 fn optimize_exact_literals(concat: ConcatLiteralSet) -> OptimizedLiterals {
-    let cardinality_limit = 4096; // TODO tune this parameter
-
-    // Don't go past trigrams
-    for n in 1..=concat.as_slice().len() / 3 {
-        let split = split_mostly_even(concat.as_slice(), n)
-            .iter()
-            .map(|lits| ConcatLiteralSet::new(lits.to_vec()))
-            .collect::<Vec<_>>();
-
-        let split_cardinality = split
-            .iter()
-            .map(ConcatLiteralSet::cardinality)
-            .sum::<usize>();
-
-        if split_cardinality < cardinality_limit {
-            return OptimizedLiterals::OrderedExact(split);
-        }
+    let cardinality_limit = 128; // TODO tune this parameter
+    if concat.cardinality() < cardinality_limit {
+        return OptimizedLiterals::OrderedExact(vec![concat]);
     }
 
     optimize_inexact_literals(vec![concat])
@@ -64,7 +50,7 @@ fn optimize_inexact_literals(concats: Vec<ConcatLiteralSet>) -> OptimizedLiteral
 }
 
 fn optimize_inexact_literal(concat: ConcatLiteralSet) -> Option<Vec<ConcatLiteralSet>> {
-    let cardinality_limit = 2048; // TODO tune this parameter
+    let cardinality_limit = 128; // TODO tune this parameter
 
     for n in 1..=concat.as_slice().len() {
         let split = split_mostly_even(concat.as_slice(), n)
