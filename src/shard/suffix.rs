@@ -107,20 +107,6 @@ impl SuffixArrayStore {
     where
         T: AsRef<[u8]>,
     {
-        let (lower, upper) = match prefix.as_ref() {
-            [a, b, c, ..] => {
-                let trigrams = self.store.get_trigrams().unwrap();
-                match trigrams.binary_search_by_key(&&[*a, *b, *c], |(trigram, _)| trigram) {
-                    Ok(i) => (
-                        Some(SuffixIdx(trigrams.get(i - 1).map(|(_, n)| *n).unwrap_or(0))),
-                        Some(SuffixIdx(trigrams[i].1)),
-                    ),
-                    _ => return SuffixIdx(0),
-                }
-            }
-            _ => (None, None),
-        };
-
         use std::cmp::Ordering::*;
         let doc_ends = self.store.get_doc_ends().unwrap();
         let docs = DocStore::new(Arc::clone(&self.store));
@@ -146,15 +132,10 @@ impl SuffixArrayStore {
             include_equal
         };
 
-        self.partition_by_content_idx(pred, lower, upper)
+        self.partition_by_content_idx(pred)
     }
 
-    fn partition_by_content_idx<P>(
-        &self,
-        mut pred: P,
-        lower: Option<SuffixIdx>,
-        upper: Option<SuffixIdx>,
-    ) -> SuffixIdx
+    fn partition_by_content_idx<P>(&self, mut pred: P) -> SuffixIdx
     where
         P: FnMut(ContentIdx) -> bool,
     {
@@ -185,20 +166,15 @@ impl SuffixArrayStore {
             pred(content_idx)
         };
 
-        self.partition_by_suffix_idx(suffix_pred, lower, upper)
+        self.partition_by_suffix_idx(suffix_pred)
     }
 
-    fn partition_by_suffix_idx<P>(
-        &self,
-        mut pred: P,
-        lower: Option<SuffixIdx>,
-        upper: Option<SuffixIdx>,
-    ) -> SuffixIdx
+    fn partition_by_suffix_idx<P>(&self, mut pred: P) -> SuffixIdx
     where
         P: FnMut(SuffixIdx) -> bool,
     {
-        let mut min = lower.unwrap_or(SuffixIdx(0));
-        let mut max = upper.unwrap_or(SuffixIdx(self.sa_len()));
+        let mut min = SuffixIdx(0);
+        let mut max = SuffixIdx(self.sa_len());
 
         while min < max {
             let mid = SuffixIdx((u32::from(max) - u32::from(min)) / 2 + u32::from(min));
